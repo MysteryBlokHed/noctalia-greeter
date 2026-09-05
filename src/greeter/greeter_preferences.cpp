@@ -455,6 +455,8 @@ namespace greeter {
     }
     prefs.powerButtonsPosition = file.appearancePowerButtonsPosition;
     prefs.schemeSelectorPosition = file.appearanceSchemeSelectorPosition;
+    prefs.blurIntensity = file.appearanceBlurIntensity;
+    prefs.tintIntensity = file.appearanceTintIntensity;
     if (file.authAllowEmptyPassword.has_value()) {
       prefs.allowEmptyPassword = *file.authAllowEmptyPassword;
     }

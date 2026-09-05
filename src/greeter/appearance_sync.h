@@ -29,8 +29,11 @@ namespace greeter::appearance {
   inline constexpr const char* kSyncTomlFileName = "sync.toml";
   inline constexpr const char* kWallpaperBaseName = "wallpaper";
   inline constexpr const char* kSyncedSchemeDisplayName = "Synced";
-  inline constexpr const char* kSyncedBlurSchemeDisplayName = "Synced (Blur)";
   inline constexpr const char* kSyncedDataDirEnv = "NOCTALIA_GREETER_STATE_DIR";
+
+  // Matches noctalia's lock screen: blur radius scales a 0..1 intensity, and
+  // the tint is the surface color at the tint intensity as its alpha.
+  inline constexpr float kBlurRadiusScale = 40.0f;
 
   [[nodiscard]] std::filesystem::path syncedDataDirectory();
   [[nodiscard]] std::filesystem::path packageConfPath();

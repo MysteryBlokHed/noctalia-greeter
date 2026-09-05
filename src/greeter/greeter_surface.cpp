@@ -1814,7 +1814,6 @@ void GreeterSurface::buildSchemeNames() {
   m_syncedAppearance = loadGreeterSyncedAppearance();
   if (m_syncedAppearance.has_value()) {
     m_schemeNames.emplace_back(greeter::appearance::kSyncedSchemeDisplayName);
-    m_schemeNames.emplace_back(greeter::appearance::kSyncedBlurSchemeDisplayName);
     m_selectedScheme = 0;
   }
 
@@ -1827,12 +1826,8 @@ void GreeterSurface::buildSchemeNames() {
 }
 
 bool GreeterSurface::isSyncedScheme(const std::size_t schemeIndex) const {
-  if (schemeIndex >= m_schemeNames.size()) {
-    return false;
-  }
-  const auto& name = m_schemeNames[schemeIndex];
-  return name == greeter::appearance::kSyncedSchemeDisplayName
-      || name == greeter::appearance::kSyncedBlurSchemeDisplayName;
+  return schemeIndex < m_schemeNames.size()
+      && m_schemeNames[schemeIndex] == greeter::appearance::kSyncedSchemeDisplayName;
 }
 
 std::optional<std::size_t> GreeterSurface::findSchemeIndex(const std::string_view name) const {
@@ -1869,6 +1864,18 @@ void GreeterSurface::clearWallpaperDisplay() {
   }
 }
 
+void GreeterSurface::applyWallpaperBackdrop(const Palette& sourcePalette) {
+  if (m_wallpaper == nullptr) {
+    return;
+  }
+
+  m_wallpaper->setBlurRadius(m_blurIntensity * greeter::appearance::kBlurRadiusScale);
+
+  Color tint = sourcePalette.surface;
+  tint.a = m_tintIntensity;
+  m_wallpaper->setTintColor(tint);
+}
+
 void GreeterSurface::applyScheme(const std::size_t schemeIndex) {
   if (schemeIndex >= m_schemeNames.size()) {
     return;
@@ -1897,19 +1904,7 @@ void GreeterSurface::applyScheme(const std::size_t schemeIndex) {
     m_wallpaperFillColor = wallpaper.fillColor;
     m_hasSyncedWallpaper = !m_wallpaperPath.empty();
     m_wallpaperDirty = true;
-
-    if (m_wallpaper != nullptr) {
-      const bool isBlur = m_schemeNames[schemeIndex] == greeter::appearance::kSyncedBlurSchemeDisplayName;
-      if (isBlur) {
-        Color tint = m_syncedAppearance->palette.surface;
-        tint.a = 0.4f;
-        m_wallpaper->setBlurRadius(30.0f);
-        m_wallpaper->setTintColor(tint);
-      } else {
-        m_wallpaper->setBlurRadius(0.0f);
-        m_wallpaper->setTintColor(rgba(0.0f, 0.0f, 0.0f, 0.0f));
-      }
-    }
+    applyWallpaperBackdrop(m_syncedAppearance->palette);
     return;
   }
 
@@ -2022,6 +2017,9 @@ void GreeterSurface::loadPreferences() {
   const auto prefs = greeter::loadGreeterPreferences();
   m_allowEmptyPassword = prefs.allowEmptyPassword;
   const auto initialSession = greeter::resolveInitialSessionName(prefs);
+
+  m_blurIntensity = prefs.blurIntensity.value_or(0.0f);
+  m_tintIntensity = prefs.tintIntensity.value_or(0.0f);
 
   if (initialSession.has_value()) {
     if (const auto index = greeter::findSessionIndex(m_sessions, *initialSession)) {

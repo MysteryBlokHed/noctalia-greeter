@@ -54,6 +54,8 @@ Set these keys in `greeter.toml`. A command-line `--session` or `--user` value t
 | `[appearance].hide_logo` | Hide the Noctalia brand logo |
 | `[appearance].power_buttons_position` | Power controls: `bottom-right` (default), `bottom-left`, `top-left`, `top-right`, or `hidden` |
 | `[appearance].scheme_selector_position` | Scheme picker: `top-right` (default), `top-left`, `bottom-left`, `bottom-right`, or `hidden` |
+| `[appearance].blur_intensity` | Blur over the Synced wallpaper, `0.0`-`1.0`; unset → `0.0` (sharp) |
+| `[appearance].tint_intensity` | Surface-color tint over the Synced wallpaper, `0.0`-`1.0`; unset → `0.0` (untinted) |
 | `[appearance].theme_mode` | Theme mode for the Synced appearance, such as `dark` |
 | `[appearance].corner_radius_scale` | Corner-radius scale for the Synced appearance |
 | `[appearance].font_family` | Fontconfig family for the Synced appearance |

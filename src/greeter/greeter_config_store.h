@@ -49,6 +49,10 @@ namespace greeter::config {
     // UI element positioning: "hidden", "bottom-left", "bottom-right", "top-left", "top-right"
     std::optional<std::string> appearancePowerButtonsPosition;
     std::optional<std::string> appearanceSchemeSelectorPosition;
+    // Synced wallpaper backdrop, 0..1 (noctalia [lockscreen] semantics).
+    // Sync never provides these, so they are declarative-only.
+    std::optional<float> appearanceBlurIntensity;
+    std::optional<float> appearanceTintIntensity;
     // Optional palette/wallpaper/font; wins over Sync sync.toml when complete.
     GreeterTomlAppearance appearance;
 

@@ -20,6 +20,12 @@ namespace {
   constexpr float kSlowRenderOperationWarnMs = 1000.0f;
   bool g_backendInfoLogged = false;
 
+  // Wallpaper blur, matching noctalia's lock screen: three separable rounds.
+  // Running them at a quarter resolution keeps the tap count affordable at 4K.
+  constexpr int kBlurRounds = 3;
+  constexpr std::uint32_t kBlurDownscale = 4;
+  constexpr float kMaxBlurRadius = 40.0f;
+
   constexpr EGLint kContextAttributes[] = {
       EGL_CONTEXT_CLIENT_VERSION,
       2,
@@ -293,6 +299,27 @@ void GlesRenderBackend::bindFramebuffer(const RenderFramebuffer& framebuffer) {
 
 void GlesRenderBackend::bindDefaultFramebuffer() { GlesFramebuffer::bindDefault(); }
 
+bool GlesRenderBackend::ensureBlurFramebuffers(const std::uint32_t width, const std::uint32_t height) {
+  // The wallpaper is static and the greeter redraws on every keystroke, so the
+  // ping-pong targets are kept alive across frames and only rebuilt on resize.
+  if (m_blurFramebuffers[0] != nullptr
+      && m_blurFramebuffers[1] != nullptr
+      && m_blurFramebuffers[0]->width() == width
+      && m_blurFramebuffers[0]->height() == height) {
+    return true;
+  }
+
+  for (auto& framebuffer : m_blurFramebuffers) {
+    framebuffer = createFramebuffer(width, height);
+    if (framebuffer == nullptr || !framebuffer->valid()) {
+      m_blurFramebuffers[0].reset();
+      m_blurFramebuffers[1].reset();
+      return false;
+    }
+  }
+  return true;
+}
+
 void GlesRenderBackend::setViewport(std::uint32_t width, std::uint32_t height) {
   glViewport(0, 0, static_cast<GLint>(width), static_cast<GLint>(height));
 }
@@ -440,14 +467,14 @@ void GlesRenderBackend::drawWallpaper(
   if (blurRadius > 0.0f) {
     const std::uint32_t targetWidth = m_bufferWidth > 0 ? m_bufferWidth : static_cast<std::uint32_t>(surfaceWidth);
     const std::uint32_t targetHeight = m_bufferHeight > 0 ? m_bufferHeight : static_cast<std::uint32_t>(surfaceHeight);
-    const std::uint32_t fbWidth = std::max(1u, targetWidth / 4);
-    const std::uint32_t fbHeight = std::max(1u, targetHeight / 4);
+    const std::uint32_t fbWidth = std::max(1u, targetWidth / kBlurDownscale);
+    const std::uint32_t fbHeight = std::max(1u, targetHeight / kBlurDownscale);
 
-    auto fb1 = createFramebuffer(fbWidth, fbHeight);
-    auto fb2 = createFramebuffer(fbWidth, fbHeight);
+    if (ensureBlurFramebuffers(fbWidth, fbHeight)) {
+      auto& source = *m_blurFramebuffers[0];
+      auto& scratch = *m_blurFramebuffers[1];
 
-    if (fb1 != nullptr && fb2 != nullptr && fb1->valid() && fb2->valid()) {
-      bindFramebuffer(*fb1);
+      bindFramebuffer(source);
       setViewport(fbWidth, fbHeight);
       clear(rgba(0.0f, 0.0f, 0.0f, 0.0f));
 
@@ -458,14 +485,30 @@ void GlesRenderBackend::drawWallpaper(
           params, fillColor, transform
       );
 
-      bindFramebuffer(*fb2);
-      setViewport(fbWidth, fbHeight);
-      clear(rgba(0.0f, 0.0f, 0.0f, 0.0f));
-      drawFramebufferBlur(fb1->colorTexture(), fbWidth, fbHeight, 1.0f, 0.0f, blurRadius);
+      // The blur runs at 1/kBlurDownscale, so the radius is in downscaled
+      // texels; the shader's tap loop caps out at kMaxBlurRadius.
+      const float passRadius = std::min(blurRadius / static_cast<float>(kBlurDownscale), kMaxBlurRadius);
 
-      bindDefaultFramebuffer();
-      setViewport(targetWidth, targetHeight);
-      drawFramebufferBlur(fb2->colorTexture(), fbWidth, fbHeight, 0.0f, 1.0f, blurRadius);
+      // Each round is a horizontal then a vertical pass. Every pass but the
+      // last ping-pongs between the two framebuffers; the last resolves
+      // straight onto the default framebuffer at full resolution.
+      for (int round = 0; round < kBlurRounds; ++round) {
+        bindFramebuffer(scratch);
+        setViewport(fbWidth, fbHeight);
+        clear(rgba(0.0f, 0.0f, 0.0f, 0.0f));
+        drawFramebufferBlur(source.colorTexture(), fbWidth, fbHeight, 1.0f, 0.0f, passRadius);
+
+        const bool lastRound = round == kBlurRounds - 1;
+        if (lastRound) {
+          bindDefaultFramebuffer();
+          setViewport(targetWidth, targetHeight);
+        } else {
+          bindFramebuffer(source);
+          setViewport(fbWidth, fbHeight);
+          clear(rgba(0.0f, 0.0f, 0.0f, 0.0f));
+        }
+        drawFramebufferBlur(scratch.colorTexture(), fbWidth, fbHeight, 0.0f, 1.0f, passRadius);
+      }
 
       if (tintColor.a > 0.0f) {
         setBlendMode(RenderBlendMode::StraightAlpha);
@@ -549,6 +592,8 @@ void GlesRenderBackend::cleanup() {
   m_blurProgram.destroy();
   m_fullscreenTextureProgram.destroy();
   m_fullscreenTintProgram.destroy();
+  m_blurFramebuffers[0].reset();
+  m_blurFramebuffers[1].reset();
   m_textureManager.cleanup();
 
   if (m_display != EGL_NO_DISPLAY) {

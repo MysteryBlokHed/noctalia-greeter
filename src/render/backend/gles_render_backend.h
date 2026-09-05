@@ -15,6 +15,8 @@
 #include "render/programs/wallpaper_program.h"
 
 #include <EGL/egl.h>
+#include <array>
+#include <memory>
 
 class GlesRenderBackend final : public RenderBackend {
 public:
@@ -89,6 +91,7 @@ private:
   void drawFullscreenQuad(const ShaderProgram& program);
   void ensureFullscreenTextureProgram();
   void ensureFullscreenTintProgram();
+  [[nodiscard]] bool ensureBlurFramebuffers(std::uint32_t width, std::uint32_t height);
 
   EGLDisplay m_display = EGL_NO_DISPLAY;
   EGLConfig m_config = nullptr;
@@ -109,4 +112,5 @@ private:
   BlurProgram m_blurProgram;
   ShaderProgram m_fullscreenTextureProgram;
   ShaderProgram m_fullscreenTintProgram;
+  std::array<std::unique_ptr<RenderFramebuffer>, 2> m_blurFramebuffers;
 };

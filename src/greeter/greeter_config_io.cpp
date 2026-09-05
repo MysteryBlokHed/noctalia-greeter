@@ -4,6 +4,7 @@
 #include "greeter/appearance_sync.h"
 #include "greeter/greeter_config_store.h"
 
+#include <algorithm>
 #include <cerrno>
 #include <cmath>
 #include <cstdio>
@@ -67,6 +68,8 @@ namespace {
         || key == "hide_logo"
         || key == "power_buttons_position"
         || key == "scheme_selector_position"
+        || key == "blur_intensity"
+        || key == "tint_intensity"
         || key == "theme_mode"
         || key == "corner_radius_scale"
         || key == "font_family"
@@ -95,6 +98,18 @@ namespace {
 
   [[nodiscard]] bool isKnownAuthKey(std::string_view key) {
     return key == "allow_empty_password" || key == "request_timeout";
+  }
+
+  // Backdrop intensities are unit-range sliders in noctalia; clamp rather than
+  // reject so a slightly out-of-range value still yields a sane backdrop.
+  [[nodiscard]] std::optional<float>
+  intensityValue(const toml::node& node, const std::filesystem::path& path, std::string_view key) {
+    const auto value = node.value<double>();
+    if (!value.has_value() || !std::isfinite(static_cast<float>(*value))) {
+      kLog.warn("{}: invalid appearance.{} value", path.string(), key);
+      return std::nullopt;
+    }
+    return std::clamp(static_cast<float>(*value), 0.0f, 1.0f);
   }
 
   [[nodiscard]] std::optional<std::string> stringValue(const toml::node& node) {
@@ -231,6 +246,10 @@ namespace {
             config.appearancePowerButtonsPosition = stringValue(entryNode);
           } else if (entryView == "scheme_selector_position") {
             config.appearanceSchemeSelectorPosition = stringValue(entryNode);
+          } else if (entryView == "blur_intensity") {
+            config.appearanceBlurIntensity = intensityValue(entryNode, path, entryView);
+          } else if (entryView == "tint_intensity") {
+            config.appearanceTintIntensity = intensityValue(entryNode, path, entryView);
           } else if (entryView == "theme_mode") {
             config.appearance.themeMode = stringValue(entryNode);
           } else if (entryView == "corner_radius_scale") {
@@ -500,6 +519,12 @@ namespace {
           table.insert_or_assign(std::string(key), value);
         }
     );
+    if (config.appearanceBlurIntensity.has_value()) {
+      appearance.insert_or_assign("blur_intensity", static_cast<double>(*config.appearanceBlurIntensity));
+    }
+    if (config.appearanceTintIntensity.has_value()) {
+      appearance.insert_or_assign("tint_intensity", static_cast<double>(*config.appearanceTintIntensity));
+    }
     if (!appearance.empty()) {
       root.insert("appearance", std::move(appearance));
     }
@@ -918,7 +943,7 @@ namespace greeter::config {
     out << "# Sync-only (sync.toml [session.power]/[[session.actions]]) and are not settable here.\n";
     out << "# [session] default, [user] default\n";
     out << "# [appearance] scheme, password_style, hide_logo, power_buttons_position, scheme_selector_position, "
-           "theme_mode, corner_radius_scale, font_family\n";
+           "blur_intensity, tint_intensity, theme_mode, corner_radius_scale, font_family\n";
     out << "# [appearance.palette] full color role table, [appearance.wallpaper] path/fill_mode/fill_color\n";
     out << "# [appearance.wallpapers.<connector>] per-output wallpaper overrides\n";
     out << "# [output] name/layout/scale/scales/width/height/transforms, [idle] timeout, [cursor] theme/size/path\n";

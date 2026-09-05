@@ -36,6 +36,10 @@ namespace greeter {
     // UI element positioning: "hidden", "bottom-left", "bottom-right", "top-left", "top-right"
     std::optional<std::string> powerButtonsPosition;
     std::optional<std::string> schemeSelectorPosition;
+    // Synced wallpaper backdrop, 0..1 (noctalia [lockscreen] semantics).
+    // Unset → 0, i.e. an unblurred, untinted wallpaper.
+    std::optional<float> blurIntensity;
+    std::optional<float> tintIntensity;
   };
 
   [[nodiscard]] std::filesystem::path greeterConfPath();

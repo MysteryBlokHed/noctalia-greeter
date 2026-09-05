@@ -158,6 +158,7 @@ private:
   void buildSchemeNames();
   void applyScheme(std::size_t schemeIndex);
   void clearWallpaperDisplay();
+  void applyWallpaperBackdrop(const Palette& sourcePalette);
   [[nodiscard]] bool isSyncedScheme(std::size_t schemeIndex) const;
   [[nodiscard]] std::optional<std::size_t> findSchemeIndex(std::string_view name) const;
   void syncWallpaperTexture();
@@ -256,6 +257,8 @@ private:
   Color m_wallpaperFillColor = rgba(0.0f, 0.0f, 0.0f, 0.0f);
   bool m_wallpaperDirty = false;
   bool m_hasSyncedWallpaper = false;
+  float m_blurIntensity = 0.0f;
+  float m_tintIntensity = 0.0f;
   bool m_hideLogo = false;
   // UI element positioning: "hidden", "bottom-left", "bottom-right", "top-left", "top-right"
   std::string m_powerButtonsPosition;

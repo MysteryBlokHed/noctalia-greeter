@@ -31,6 +31,11 @@ hide_logo = false
 power_buttons_position = "bottom-right"
 # Scheme picker: top-right (default), top-left, bottom-left, bottom-right, or hidden.
 scheme_selector_position = "top-right"
+# Synced wallpaper backdrop, 0.0-1.0 each; same scale as the Noctalia shell's
+# lock screen Blur/Tint Intensity. Sync does not carry these, so set them here.
+# Both default to 0.0 (sharp, untinted) rather than the shell's 0.5.
+blur_intensity = 0.5
+tint_intensity = 0.1
 theme_mode = "dark"
 corner_radius_scale = 1.0
 # Optional; empty / omit keeps the greeter default font.
