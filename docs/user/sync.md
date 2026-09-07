@@ -5,8 +5,6 @@ sidebar:
   order: 3
 ---
 
-# Sync with Noctalia
-
 Noctalia Shell can copy its current appearance and monitor arrangement to the login screen. Install both **Noctalia** and **Noctalia Greeter**, including the packaged apply helper and Polkit action.
 
 :::caution[Passwordless version requirement]
@@ -294,8 +292,8 @@ privilege_command = "ghostty -e pkexec"
 
 The wrapper must ultimately invoke `pkexec`. Alternatively, install elogind so Polkit can attach an in-session authentication prompt. See [Troubleshooting](troubleshooting.md#appearance-sync) if Sync still fails.
 
-In legacy mode—either with a recognized older helper or a custom greeter state
-directory—the staged directory instead follows `$XDG_RUNTIME_DIR` and the
+In legacy mode, either with a recognized older helper or a custom greeter state
+directory, the staged directory instead follows `$XDG_RUNTIME_DIR` and the
 helper uses its positional syntax. For the default state directory, run:
 
 ```sh
