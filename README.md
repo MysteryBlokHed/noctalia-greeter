@@ -1,5 +1,4 @@
-Noctalia Greeter
-===
+# Noctalia Greeter
 
 A minimal login greeter for [greetd](https://github.com/kennylevinsen/greetd) that matches the look and feel of [Noctalia Shell](https://github.com/noctalia-dev/noctalia-shell).
 
@@ -28,7 +27,7 @@ A minimal login greeter for [greetd](https://github.com/kennylevinsen/greetd) th
 
 ## What is Noctalia Greeter?
 
-Noctalia Greeter is the screen you see before your desktop session starts. It lets you pick a user, enter your password, choose a Wayland session, and pick a color scheme - with the same visual language as Noctalia Shell.
+Noctalia Greeter is the screen you see before your desktop session starts. It lets you pick a user, enter your password, choose a Wayland session, and pick a color scheme - with the same visual language as Noctalia. A configurable clock uses Noctalia-compatible time/date formats and the active greeter palette.
 
 It is built for **greetd**: greetd launches `noctalia-greeter-session`, which starts the bundled wlroots compositor and runs the greeter inside that session.
 

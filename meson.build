@@ -1,5 +1,5 @@
 project('noctalia-greeter', ['c', 'cpp'],
-  version: '1.4.0',
+  version: '1.6.0',
   default_options: [
     'cpp_std=c++20',
     'cpp_extensions=false',
@@ -94,10 +94,12 @@ foreach _p : [
 endforeach
 
 _greeter_sources = files(
+  'src/config/output_identity.c',
   'src/core/log.cpp',
   'src/core/deferred_call.cpp',
   'src/core/resource_paths.cpp',
   'src/core/ui_phase.cpp',
+  'src/time/time_format.cpp',
   'src/wayland/wayland_client.cpp',
   'src/wayland/wayland_seat.cpp',
   'src/render/gl_shared_context.cpp',
@@ -228,6 +230,12 @@ install_data(
 )
 
 install_data(
+  'scripts/noctalia-greeter-xsession',
+  install_dir: get_option('bindir'),
+  install_mode: 'rwxr-xr-x',
+)
+
+install_data(
   [
     'scripts/greetd_setup_lib.sh',
     'scripts/print_greetd_config.sh',
@@ -279,9 +287,11 @@ install_data(
   install_dir: get_option('prefix') / 'lib' / 'tmpfiles.d',
 )
 
-executable('noctalia-greeter-compositor',
+noctalia_greeter_compositor_executable = executable('noctalia-greeter-compositor',
   sources: files(
     'src/compositor/noctalia_compositor.c',
+    'src/compositor/system_keyboard_config.c',
+    'src/config/output_identity.c',
     'src/core/log.cpp',
     'src/greeter/greeter_config_io.cpp',
   ),
@@ -338,7 +348,11 @@ test(
 
 legacy_staging_compatibility_test = executable(
   'legacy-staging-compatibility-test',
-  sources: _apply_appearance_support_sources + files('tests/legacy_staging_compatibility_test.cpp'),
+  sources: _apply_appearance_support_sources + files(
+    'src/greeter/appearance_config.cpp',
+    'src/render/core/color.cpp',
+    'tests/legacy_staging_compatibility_test.cpp',
+  ),
   dependencies: [nlohmann_dep, tomlplusplus_dep],
   include_directories: _greeter_tools_inc,
   cpp_args: [
@@ -349,3 +363,88 @@ legacy_staging_compatibility_test = executable(
 )
 
 test('legacy-staging-compatibility', legacy_staging_compatibility_test)
+
+wallpaper_span_geometry_test = executable(
+  'wallpaper-span-geometry-test',
+  sources: files('tests/wallpaper_span_geometry_test.cpp'),
+  include_directories: include_directories('src'),
+  cpp_args: ['-Wall', '-Wextra', '-Wpedantic', '-Wconversion', '-Wshadow'],
+  build_by_default: false,
+)
+
+test('wallpaper-span-geometry', wallpaper_span_geometry_test)
+
+system_keyboard_config_test = executable(
+  'system-keyboard-config-test',
+  sources: files(
+    'tests/system_keyboard_config_test.c',
+    'src/compositor/system_keyboard_config.c',
+  ),
+  include_directories: include_directories('src'),
+  c_args: ['-Wall', '-Wextra', '-Wpedantic', '-Wconversion'],
+  build_by_default: false,
+)
+
+test('system-keyboard-config', system_keyboard_config_test)
+
+output_identity_test = executable(
+  'output-identity-test',
+  sources: files(
+    'tests/output_identity_test.cpp',
+    'src/config/output_identity.c',
+  ),
+  include_directories: include_directories('src'),
+  cpp_args: ['-Wall', '-Wextra', '-Wpedantic', '-Wconversion', '-Wshadow'],
+  build_by_default: false,
+)
+
+test('output-identity', output_identity_test)
+
+test(
+  'compositor-headless-layout',
+  find_program('sh'),
+  args: [
+    meson.project_source_root() / 'tests/compositor_headless_test.sh',
+    noctalia_greeter_compositor_executable,
+    find_program('true').full_path(),
+  ],
+)
+
+session_discovery_test = executable(
+  'session-discovery-test',
+  sources: files('tests/session_discovery_test.cpp', 'src/greeter/greeter_sessions.cpp'),
+  include_directories: include_directories('src'),
+  cpp_args: ['-Wall', '-Wextra', '-Wpedantic', '-Wconversion', '-Wshadow'],
+  build_by_default: false,
+)
+
+test('session-discovery', session_discovery_test)
+
+time_format_test = executable(
+  'time-format-test',
+  sources: files('tests/time_format_test.cpp', 'src/time/time_format.cpp'),
+  include_directories: include_directories('src'),
+  cpp_args: ['-Wall', '-Wextra', '-Wpedantic', '-Wconversion', '-Wshadow'],
+  build_by_default: false,
+)
+
+test('time-format', time_format_test)
+
+wallpaper_program_pixel_test = executable(
+  'wallpaper-program-pixel-test',
+  sources: files(
+    'tests/wallpaper_program_pixel_test.cpp',
+    'src/render/programs/wallpaper_program.cpp',
+    'src/render/core/shader_program.cpp',
+  ),
+  dependencies: [egl_dep, gles2_dep],
+  include_directories: include_directories('src'),
+  cpp_args: ['-Wall', '-Wextra', '-Wpedantic', '-Wconversion', '-Wshadow'],
+  build_by_default: false,
+)
+
+test(
+  'wallpaper-program-pixels',
+  wallpaper_program_pixel_test,
+  env: ['LIBGL_ALWAYS_SOFTWARE=1'],
+)

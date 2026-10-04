@@ -33,6 +33,9 @@ The service may have a different unit name on a distribution-provided setup. On 
 | `stderr`              | Send informational and debug messages to stdout, and warnings and errors to stderr |
 | An absolute file path | Append to that file and continue logging through syslog                            |
 
+`WLR_LOG` controls messages from the bundled wlroots compositor. Accepted values are
+`silent`, `error`, `info`, and `debug`; the session wrapper defaults to `error`.
+
 For temporary console diagnostics, add the variable to the greetd session command:
 
 ```toml
@@ -70,11 +73,41 @@ greetd must launch `noctalia-greeter-session`, not the `noctalia-greeter` client
 
 ### Wrong size or only one monitor looks right
 
-Check that `[output].name` matches a connector reported by `noctalia-greeter outputs`. Review the configured layout and scales when using more than one monitor. See [Displays](displays.md).
+Check that `[output].name` matches a connector or stable identifier reported by
+`noctalia-greeter outputs --details`. Review the configured layout and scales
+when using more than one monitor. See [Displays](displays.md).
 
 ### Blank flash or modeset during login
 
-The greeter and desktop session may be selecting different DRM modes. Set `[output].width` and `[output].height` to the desktop's resolution; both values are required. See [Match the desktop output mode](displays.md#match-the-desktop-output-mode).
+The greeter uses each display's complete EDID-preferred mode by default. If the
+desktop session uses a different DRM mode, set
+`[output].width`, `[output].height`, and `[output].refresh_rate` to the desktop's
+mode; both dimensions are required when either is set. See
+[Match the desktop output mode](displays.md#match-the-desktop-output-mode).
+For monitors with different refresh rates, set `[output].refresh_rate` to a
+mapping such as `"DP-1:120; HDMI-A-1:60"`.
+
+### Atomic commit failure during direct scan-out
+
+Noctalia Greeter disables wlroots direct scan-out by default. The optimization
+is not needed for a short-lived login session, and avoiding it removes a
+driver-sensitive path from multi-output presentation. An explicit
+`WLR_SCENE_DISABLE_DIRECT_SCANOUT` value is still honored; set it to `0` only
+when testing direct scan-out deliberately.
+
+On version 1.5.0, `Atomic commit failed` followed by `Direct scan-out disabled`
+means wlroots rejected the optional scan-out path and attempted compositing as
+a fallback; those two lines alone do not identify why the greeter later exited.
+Upgrade first. To test the same mitigation temporarily on 1.5.0, use:
+
+```toml
+[default_session]
+command = "env WLR_SCENE_DISABLE_DIRECT_SCANOUT=1 /usr/bin/noctalia-greeter-session"
+```
+
+If the current version still exits, capture the subsequent compositor line
+reporting the greeter's exit status or signal and any Wayland or EGL error from
+the greeter process. Those later lines identify the actual exit path.
 
 ### Screen never blanks
 
@@ -104,6 +137,39 @@ This command terminates greeter and compositor processes and stops greetd, so us
 
 greetd did not answer a request before the watchdog expired. Inspect the greetd journal for a stalled or crashed PAM or session worker, then restart greetd. `[auth].request_timeout` controls the watchdog; its default is `60` seconds, and `0` disables it. See [Configuration](configuration.md).
 
+### Fingerprint blocks password login
+
+PAM authentication is serialized. While `pam_fprintd` is waiting for a
+fingerprint, it cannot check a password at the same time. The greetd IPC also
+exposes one PAM conversation, so the greeter cannot safely bypass the active
+fingerprint module or start a parallel password stack. This is an upstream PAM
+limitation documented by [`pam_fprintd(8)`](https://manpages.debian.org/testing/libpam-fprintd/pam_fprintd.8.en.html)
+and the [greetd IPC protocol](https://manpages.debian.org/testing/greetd/greetd-ipc.7.en.html).
+
+Fedora's Authselect profiles place `pam_fprintd` before `pam_unix` when the
+`with-fingerprint` feature is enabled. A password typed before authentication
+starts remains queued until the fingerprint attempt succeeds, fails, or times
+out; it has not yet been accepted or rejected by `pam_unix`.
+
+Choose the behavior that fits the system:
+
+- Scan a finger, or wait for the fingerprint module to time out before the PAM
+  stack reaches its password module.
+- If fingerprint login is not needed anywhere, disable the Fedora Authselect
+  feature with `sudo authselect disable-feature with-fingerprint`.
+- To change only greetd, create and maintain a dedicated, fingerprint-free PAM
+  service for greetd. Follow the distribution's PAM/Authselect documentation;
+  do not directly edit Fedora's generated `system-auth` file because Authselect
+  will overwrite it.
+- A custom Authselect profile can instead give `pam_fprintd` a shorter
+  `timeout` or fewer `max-tries`, reducing the delay before password fallback.
+
+`[auth].allow_empty_password = true` only permits submitting an empty password
+field so fingerprint or smartcard PAM can start. It does not make fingerprint
+and password authentication parallel. Keep `[auth].request_timeout` longer
+than the configured `pam_fprintd` timeout, or set it to `0`, so the greeter's
+watchdog does not expire before PAM reaches the password fallback.
+
 ### Wrong session is selected on startup
 
 Use the desktop entry's exact **`Name=`** value from `noctalia-greeter sessions`, not its `.desktop` filename. Command-line `--session` takes precedence over `[session].default`, which takes precedence over the last-used `[session].last` value in `sync.toml`.
@@ -113,6 +179,36 @@ Put names containing spaces or punctuation in `greeter.toml` instead of leaving 
 ### GNOME returns to the greeter
 
 GNOME expects a systemd-managed user session and may fail with a `graphical-session-pre.target` error. The greeter passes `XDG_SESSION_TYPE` and the desktop entry's `DesktopNames` environment through greetd, but GNOME support remains best-effort compared with GDM. If the normal entry still fails, use GDM for GNOME or create a suitable `wayland-sessions` wrapper.
+
+### X11 session doesn't start
+
+`xsessions` entries run through `noctalia-greeter-xsession`, which needs
+`startx` (from `xinit`) installed. `startx: command not found` (or
+noctalia-greeter's own "startx not found" error) in the session log means
+`xinit` is missing.
+
+If `startx` is present but Xorg itself fails, reproduce the exact wrapper
+invocation by hand from a terminal to see the real Xorg error:
+
+```sh
+noctalia-greeter-xsession /path/to/session/binary
+```
+
+A `parse_vt_settings: Cannot open /dev/tty0 (Permission denied)` error here
+usually means `XDG_VTNR` was unset in the environment you ran this from (it
+is only guaranteed to be set for a real session opened by greetd's PAM
+stack, e.g. via `pam_elogind.so`/`pam_systemd.so` in `/etc/pam.d/greetd`) —
+this is expected when testing from an existing desktop session rather than
+through the greeter.
+
+If Xorg starts but the screen shows a terminal instead of the desktop, with
+an error like `xterm: bad command line option`, the wrapper's `startx` fell
+back to its default client instead of running the session — this is handled
+automatically since noctalia-greeter resolves `Exec=` to an absolute path
+before calling `startx`, but a very old or unusual `startx` implementation
+may still behave differently. See
+[Default session](configuration.md#default-session) for what the wrapper
+does and why.
 
 ## Sync and Polkit
 
@@ -205,4 +301,15 @@ Install and enable AccountsService, commonly provided by an `accountsservice` pa
 
 ### Cursor theme is missing or falls back to the default
 
-Set `[cursor].theme` and, optionally, `[cursor].size` in `greeter.toml`. If the theme is outside the default search path, also set `[cursor].path`. The path and theme files must be readable by the greetd user; a theme installed only in your home directory is normally unavailable. See [Cursor theme](input.md#cursor-theme).
+Set `[cursor].theme` to the exact, case-sensitive directory name of an installed
+XCursor theme, not its desktop display name. For example, Arch Linux's Breeze
+package uses `breeze_cursors`, not `Breeze`. If the theme is outside the default
+search path, also set `[cursor].path`. The path and theme files must be readable
+by the greetd user; a theme installed only in your home directory is normally
+unavailable.
+
+When a requested theme is unavailable, the compositor logs `cursor theme ...
+was not found` and wlroots uses a built-in fallback. The fallback may appear too
+small on scaled outputs even when `[cursor].size` is set. Install the theme for
+the system, correct its name or search path, and restart greetd. See
+[Cursor theme](input.md#cursor-theme).

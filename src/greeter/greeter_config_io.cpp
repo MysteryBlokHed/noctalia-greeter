@@ -51,7 +51,8 @@ namespace {
         || key == "cursor"
         || key == "keyboard"
         || key == "auth"
-        || key == "idle";
+        || key == "idle"
+        || key == "clock";
   }
 
   [[nodiscard]] bool isKnownSessionKey(std::string_view key) {
@@ -85,10 +86,15 @@ namespace {
         || key == "scales"
         || key == "width"
         || key == "height"
+        || key == "refresh_rate"
         || key == "transforms";
   }
 
   [[nodiscard]] bool isKnownIdleKey(std::string_view key) { return key == "timeout"; }
+
+  [[nodiscard]] bool isKnownClockKey(std::string_view key) {
+    return key == "enabled" || key == "position" || key == "time_format" || key == "date_format";
+  }
 
   [[nodiscard]] bool isKnownCursorKey(std::string_view key) { return key == "theme" || key == "size" || key == "path"; }
 
@@ -294,6 +300,32 @@ namespace {
               kLog.warn("{}: appearance.wallpapers must be a table", path.string());
             }
           }
+        } else if (keyView == "clock") {
+          if (!isKnownClockKey(entryView)) {
+            warnUnknownSectionKey(path, keyView, entryView);
+            continue;
+          }
+          if (entryView == "enabled") {
+            if (const auto value = entryNode.value<bool>()) {
+              config.clockEnabled = *value;
+            } else {
+              kLog.warn("{}: invalid clock.enabled value", path.string());
+            }
+          } else if (entryView == "position") {
+            config.clockPosition = stringValue(entryNode);
+          } else if (entryView == "time_format") {
+            if (const auto value = entryNode.value<std::string>()) {
+              config.clockTimeFormat = *value;
+            } else {
+              kLog.warn("{}: invalid clock.time_format value", path.string());
+            }
+          } else if (entryView == "date_format") {
+            if (const auto value = entryNode.value<std::string>()) {
+              config.clockDateFormat = *value;
+            } else {
+              kLog.warn("{}: invalid clock.date_format value", path.string());
+            }
+          }
         } else if (keyView == "output") {
           if (!isKnownOutputKey(entryView)) {
             warnUnknownSectionKey(path, keyView, entryView);
@@ -320,6 +352,14 @@ namespace {
               config.outputModeHeight = *height;
             } else {
               kLog.warn("{}: invalid output.height value", path.string());
+            }
+          } else if (entryView == "refresh_rate") {
+            if (const auto refreshRate = positiveFloatValue(entryNode); refreshRate && *refreshRate <= 1000.0f) {
+              config.outputRefreshRate = *refreshRate;
+            } else if (const auto refreshRateMap = stringValue(entryNode)) {
+              config.outputRefreshRateMap = *refreshRateMap;
+            } else {
+              kLog.warn("{}: invalid output.refresh_rate value", path.string());
             }
           } else if (entryView == "transforms") {
             config.outputTransforms = stringValue(entryNode);
@@ -529,6 +569,29 @@ namespace {
       root.insert("appearance", std::move(appearance));
     }
 
+    if (config.clockEnabled.has_value()
+        || config.clockPosition.has_value()
+        || config.clockTimeFormat.has_value()
+        || config.clockDateFormat.has_value()) {
+      toml::table clock;
+      if (config.clockEnabled.has_value()) {
+        clock.insert_or_assign("enabled", *config.clockEnabled);
+      }
+      insertString(
+          clock, "position", config.clockPosition,
+          [](toml::table& table, std::string_view key, const std::string& value) {
+            table.insert_or_assign(std::string(key), value);
+          }
+      );
+      if (config.clockTimeFormat.has_value()) {
+        clock.insert_or_assign("time_format", *config.clockTimeFormat);
+      }
+      if (config.clockDateFormat.has_value()) {
+        clock.insert_or_assign("date_format", *config.clockDateFormat);
+      }
+      root.insert("clock", std::move(clock));
+    }
+
     toml::table output;
     insertString(
         output, "name", config.outputName, [](toml::table& table, std::string_view key, const std::string& value) {
@@ -548,6 +611,16 @@ namespace {
     }
     if (config.outputModeHeight.has_value()) {
       output.insert_or_assign("height", static_cast<int64_t>(*config.outputModeHeight));
+    }
+    if (config.outputRefreshRate.has_value()) {
+      output.insert_or_assign("refresh_rate", static_cast<double>(*config.outputRefreshRate));
+    } else {
+      insertString(
+          output, "refresh_rate", config.outputRefreshRateMap,
+          [](toml::table& table, std::string_view key, const std::string& value) {
+            table.insert_or_assign(std::string(key), value);
+          }
+      );
     }
     insertString(
         output, "transforms", config.outputTransforms,
@@ -946,9 +1019,11 @@ namespace greeter::config {
            "blur_intensity, tint_intensity, theme_mode, corner_radius_scale, font_family\n";
     out << "# [appearance.palette] full color role table, [appearance.wallpaper] path/fill_mode/fill_color\n";
     out << "# [appearance.wallpapers.<connector>] per-output wallpaper overrides\n";
-    out << "# [output] name/layout/scale/scales/width/height/transforms, [idle] timeout, [cursor] theme/size/path\n";
+    out << "# [output] name/layout/scale/scales/width/height/refresh_rate/transforms, "
+           "[idle] timeout, [cursor] theme/size/path\n";
     out << "# [keyboard] layout/variant/options/numlock\n";
     out << "# [auth] allow_empty_password (bool), request_timeout (0-3600 seconds; default 60, 0 disables)\n";
+    out << "# [clock] enabled/position/time_format/date_format\n";
     out << '\n';
     out << formatToml(table);
 
@@ -1110,6 +1185,7 @@ extern "C" void greeter_compositor_config_load(const char* state_dir, struct gre
       preferString(config.outputTransforms, sync.outputTransforms)
   );
   copyString(out->output_scales, sizeof(out->output_scales), preferString(config.outputScales, sync.outputScales));
+  copyString(out->output_refresh_rate_map, sizeof(out->output_refresh_rate_map), config.outputRefreshRateMap);
 
   if (config.outputScale.has_value() && *config.outputScale >= 1.0f) {
     out->manual_scale = *config.outputScale;
@@ -1119,6 +1195,9 @@ extern "C" void greeter_compositor_config_load(const char* state_dir, struct gre
   }
   if (config.outputModeHeight.has_value() && *config.outputModeHeight > 0) {
     out->manual_mode_height = *config.outputModeHeight;
+  }
+  if (config.outputRefreshRate.has_value() && *config.outputRefreshRate > 0.0f) {
+    out->manual_mode_refresh_mhz = static_cast<int>(std::lround(*config.outputRefreshRate * 1000.0f));
   }
   if (config.idleTimeoutSec.has_value() && *config.idleTimeoutSec >= 0) {
     out->idle_timeout_sec = *config.idleTimeoutSec;

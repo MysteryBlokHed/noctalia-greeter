@@ -12,6 +12,7 @@ Administrator-controlled settings live in `/var/lib/noctalia-greeter/greeter.tom
 - [Configuration reference](#configuration-reference)
 - [Default session](#default-session)
 - [Default user](#default-user)
+- [Clock](#clock)
 - [Full example](#full-example)
 
 ## Configuration files
@@ -24,9 +25,13 @@ Administrator-controlled settings live in `/var/lib/noctalia-greeter/greeter.tom
 
 If `greeter.toml` is missing, the greeter uses built-in defaults. System setup creates the state directory and files owned by the greetd session user.
 
-On NixOS, use `services.displayManager.noctalia-greeter.settings` with the nixpkgs module or `programs.noctalia-greeter.settings` with the project flake. Both materialize `greeter.toml` using a tmpfiles `L+` entry.
+On NixOS, use `services.displayManager.noctalia-greeter.settings` with both the nixpkgs, and project flake modules. Both materialize `greeter.toml` using a tmpfiles `L+` entry.
 
 The **Synced** scheme uses a complete `[appearance.palette]` from `greeter.toml` when present, otherwise the same keys from `sync.toml`. Legacy live `appearance.json` is migrated into `sync.toml` once. See [Sync with Noctalia](sync.md) for the complete precedence and authorization model.
+
+Wallpaper configuration is independent of the selected color scheme and does
+not require an `[appearance.palette]`. A wallpaper declared in `greeter.toml`
+therefore also works with built-in schemes such as `Noctalia`.
 
 ## Keys the greeter remembers
 
@@ -58,24 +63,34 @@ Set these keys in `greeter.toml`. A command-line `--session` or `--user` value t
 | `[appearance].corner_radius_scale` | Corner-radius scale for the Synced appearance |
 | `[appearance].font_family` | Fontconfig family for the Synced appearance |
 | `[appearance.palette]` | Complete Synced palette; takes precedence over Sync appearance |
-| `[appearance.wallpaper]` | Default wallpaper `path`, `fill_mode`, and `fill_color` |
-| `[appearance.wallpapers.<connector>]` | Per-output wallpaper override |
-| `[output].name` | Connector on which to pin the greeter |
-| `[output].layout` | Multi-monitor positions; overrides synced layout |
+| `[appearance.wallpaper]` | Default wallpaper `path`, `fill_mode`, and `fill_color`; `fill_color` also works without an image, and `fill_mode` accepts `center`, `crop`, `fit`, `stretch`, `repeat`, or `span` |
+| `[appearance.wallpapers.<connector>]` | Per-output wallpaper override using the same fill modes |
+| `[clock].enabled` | Show the clock; defaults to `true` |
+| `[clock].position` | `above-panel` (default), `top-left`, `top-center`, `top-right`, `bottom-left`, `bottom-center`, or `bottom-right` |
+| `[clock].time_format` | Time line format; defaults to `{:%H:%M}` |
+| `[clock].date_format` | Date line format; defaults to `%A, %x` |
+| `[output].name` | Connector or stable EDID identifier on which to pin the greeter |
+| `[output].layout` | Multi-monitor positions by connector or stable identifier; overrides synced layout |
 | `[output].width` / `.height` | Preferred DRM mode size |
-| `[output].transforms` | Per-connector DRM transform; overrides synced transforms |
-| `[output].scales` | Per-connector scale; overrides synced scales |
+| `[output].refresh_rate` | Preferred DRM mode refresh rate in hertz, globally or per output |
+| `[output].transforms` | Per-output DRM transform by connector or stable identifier; overrides synced transforms |
+| `[output].scales` | Per-output scale by connector or stable identifier; overrides synced scales |
 | `[output].scale` | Manual UI scale for every output |
 | `[idle].timeout` | Seconds before outputs blank; `0` disables |
 | `[cursor].theme` / `.size` / `.path` | Cursor theme |
 | `[keyboard].layout` / `.variant` / `.options` / `.numlock` | XKB keymap |
-| `[auth].allow_empty_password` | Permit empty submission for fprintd or smartcard PAM |
+| `[auth].allow_empty_password` | Permit an empty submission to start fprintd or smartcard PAM; this does not make password and fingerprint checks run in parallel |
 | `[auth].request_timeout` | Seconds to wait for each greetd reply (`0`–`3600`, default `60`); `0` disables the watchdog |
 
 Display and input settings have task-oriented guides:
 
 - [Displays](displays.md): connectors, layout, mode, transforms, scale, and idle blanking
 - [Keyboard and cursor](input.md): navigation, XKB, Num Lock, and cursor themes
+
+PAM handles authentication methods in the order configured by the system. In
+particular, `pam_fprintd` cannot accept a password while it is waiting for a
+fingerprint. See [Fingerprint blocks password login](troubleshooting.md#fingerprint-blocks-password-login)
+for the limitation and configuration options.
 
 ## Default session
 
@@ -85,10 +100,35 @@ The value is the desktop entry's exact **`Name=`**, which is the same text shown
 noctalia-greeter sessions
 ```
 
-Sessions are discovered from `wayland-sessions` directories under
-`/usr/local/share`, `/usr/share`, `/run/current-system/sw/share`, and each base
-path in `XDG_DATA_DIRS`. Name lookup is case-insensitive, but using the exact
-picker spelling keeps the configuration unambiguous.
+Sessions are discovered from `wayland-sessions` and `xsessions` directories
+under `/usr/local/share`, `/usr/share`, `/run/current-system/sw/share`, and
+each base path in `XDG_DATA_DIRS`. Name lookup is case-insensitive, but using
+the exact picker spelling keeps the configuration unambiguous. If a
+`wayland-sessions` and an `xsessions` entry share the same `Name=`, the
+`wayland-sessions` entry wins.
+
+An `xsessions` entry's `Exec=` is run through `noctalia-greeter-xsession`,
+which bootstraps `Xorg` via `startx` before running it — `startx` handles
+`DISPLAY`/`Xauthority` setup for the client. This requires `xinit` (for
+`startx`) to be installed; without it, the session fails with a clear
+"startx not found" error instead of starting. The wrapper runs:
+
+```sh
+startx <session Exec=> -- -seat "${XDG_SEAT:-seat0}" -keeptty vt${XDG_VTNR}
+```
+
+`-seat`/`vt${XDG_VTNR}` let Xorg get the GPU device and VT through
+elogind/systemd-logind instead of needing root: `-seat` gets the device
+handoff, and the explicit `vtN` is required separately because Xorg only
+skips its normally-root-only `/dev/tty0` probe when a VT number is given
+directly on the command line. `XDG_SEAT`/`XDG_VTNR` come from the PAM
+session the same way `XDG_SESSION_TYPE` does. The wrapper also resolves a
+bare `Exec=` program name (e.g. `Exec=bspwm`) to an absolute path before
+handing it to `startx`, since some `startx` implementations only accept the
+client as a direct path and silently fall back to their default client
+(`xterm`) otherwise. See
+[X11 session doesn't start](troubleshooting.md#x11-session-doesnt-start) if
+it still fails.
 
 Set the default declaratively, especially when it contains spaces or punctuation:
 
@@ -119,6 +159,22 @@ default = "alice"
 You can instead pass `--user alice` after the session wrapper's `--`. Use the exact login name from `/etc/passwd`. **Esc** or the back button returns to the user list.
 
 Resolution order is command-line `--user`, then `[user].default`, then the user picker.
+
+## Clock
+
+The clock is enabled by default and centered above the login panel. It uses the active palette's `on_surface` color for the time and `on_surface_variant` for the date, including when the **Synced** scheme is selected.
+
+```toml
+[clock]
+enabled = true
+position = "above-panel"
+time_format = "{:%H:%M}"
+date_format = "%A, %x"
+```
+
+Formats accept the same forms as Noctalia: bare `strftime` patterns such as `%H:%M`, or C++ chrono fields such as `{:%H:%M}`. Literal text is preserved, `\n` adds a line break, `%%` prints `%`, and `{{` / `}}` print braces. Common tokens include `%H` (24-hour hour), `%I` (12-hour hour), `%M` (minute), `%S` (second), `%p` (AM/PM), `%A` (weekday), `%B` (month), `%d` (day), `%Y` (year), and `%x` (locale date). Names and locale-preferred values follow the system's `LC_TIME`; the timezone follows the greeter host.
+
+Set either format to an empty string to hide only that line, or set `enabled = false` to disable the clock. The four corner positions use the same names as the power and scheme controls. When multiple elements use one corner, they stack inward in this order: scheme selector, power buttons, clock. `top-center` stays below a configuration-error banner. `bottom-center` occupies the logo's bottom-center slot when `[appearance].hide_logo = true`; with the logo visible, the clock stacks directly above it. On a display too short to fit a centered clock without touching the login panel, the date is omitted first; the clock is hidden only if the time line still cannot fit without overlap.
 
 ## Full example
 

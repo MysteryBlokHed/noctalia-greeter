@@ -31,6 +31,9 @@ struct WaylandOutputInfo {
   wl_output* output = nullptr;
   std::uint32_t registryName = 0;
   std::string name;
+  std::string make;
+  std::string model;
+  std::string description;
   int32_t x = 0;
   int32_t y = 0;
   int32_t physicalWidthMm = 0;
@@ -38,8 +41,12 @@ struct WaylandOutputInfo {
   int32_t pixelWidth = 0;
   int32_t pixelHeight = 0;
   int32_t scale = 1;
+  int32_t transform = 0;
   float preferredScale = 0.0f;
   bool done = false;
+
+  [[nodiscard]] std::string stableIdentifier() const;
+  [[nodiscard]] bool matchesIdentifier(std::string_view identifier) const;
 };
 
 class WaylandClient {
@@ -97,6 +104,7 @@ public:
   [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>> combinedLogicalSize() const noexcept;
   [[nodiscard]] std::optional<std::pair<std::uint32_t, std::uint32_t>>
   logicalSizeForOutput(const wl_output* output) const noexcept;
+  [[nodiscard]] std::optional<WaylandOutputLayout> logicalLayoutForOutput(const wl_output* output) const noexcept;
   void setOutputPreferredScale(wl_output* output, float scale) noexcept;
 
   static void

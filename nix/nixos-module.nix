@@ -6,7 +6,7 @@
   ...
 }:
 let
-  cfg = config.programs.noctalia-greeter;
+  cfg = config.services.displayManager.noctalia-greeter;
   tomlFormat = pkgs.formats.toml { };
 
   generateToml =
@@ -19,7 +19,14 @@ let
       tomlFormat.generate name value;
 in
 {
-  options.programs.noctalia-greeter = {
+  imports = [
+    (lib.mkRenamedOptionModule
+      [ "programs" "noctalia-greeter" ]
+      [ "services" "displayManager" "noctalia-greeter" ]
+    )
+  ];
+  disabledModules = ["services/display-managers/noctalia-greeter.nix"];
+  options.services.displayManager.noctalia-greeter = {
     enable = lib.mkEnableOption "Whether to enable Noctalia Greeter, A minimal login greeter for greetd.";
 
     package = lib.mkOption {
@@ -43,6 +50,17 @@ in
         authentication for every sync; that workflow remains fully supported.
       '';
       example = [ "alice" ];
+    };
+
+    cursorTheme.package = lib.mkPackageOption pkgs "cursor theme" {
+      nullable = true;
+      default = null;
+    }
+    // {
+      description = ''
+        Cursor theme package. Defaults settings.cursor.path to
+        "''${package}/share/icons"; set it directly if needed.
+      '';
     };
 
     settings = lib.mkOption {
@@ -114,7 +132,11 @@ in
 
         services.greetd = {
           enable = lib.mkDefault true;
-          settings.default_session.command = lib.mkDefault "${cfg.package}/bin/noctalia-greeter-session -- ${cfg.greeter-args}";
+          settings.default_session.command = lib.mkDefault (
+            "${lib.getExe' pkgs.coreutils "env"} "
+            + "XDG_DATA_DIRS=${config.services.displayManager.sessionData.desktops}/share "
+            + "${cfg.package}/bin/noctalia-greeter-session -- ${cfg.greeter-args}"
+          );
         };
 
         services.accounts-daemon.enable = lib.mkDefault true;
@@ -138,6 +160,10 @@ in
           }
         ];
       }
+
+      (lib.mkIf (cfg.cursorTheme.package != null) {
+        services.displayManager.noctalia-greeter.settings.cursor.path = lib.mkDefault "${cfg.cursorTheme.package}/share/icons";
+      })
 
       (lib.mkIf (cfg.passwordless-sync-users != [ ]) {
         security.polkit.extraConfig = lib.mkAfter ''

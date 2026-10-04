@@ -1,8 +1,13 @@
+#include "greeter/appearance_config.h"
+#include "greeter/appearance_sync.h"
+#include "greeter/greeter_config_io.h"
+#include "greeter/greeter_preferences.h"
 #include "tools/secure_appearance_sync.h"
 
 #include <algorithm>
 #include <array>
 #include <cerrno>
+#include <cstdlib>
 #include <cstring>
 #include <filesystem>
 #include <fstream>
@@ -64,6 +69,32 @@ namespace {
     std::filesystem::path syncFile;
   };
 
+  class ScopedStateDirectory {
+  public:
+    explicit ScopedStateDirectory(const std::filesystem::path& path) {
+      if (const char* current = std::getenv(greeter::appearance::kSyncedDataDirEnv)) {
+        previous = current;
+      }
+      if (::setenv(greeter::appearance::kSyncedDataDirEnv, path.c_str(), 1) != 0) {
+        throw std::runtime_error("setenv failed");
+      }
+    }
+
+    ~ScopedStateDirectory() {
+      if (previous.has_value()) {
+        ::setenv(greeter::appearance::kSyncedDataDirEnv, previous->c_str(), 1);
+      } else {
+        ::unsetenv(greeter::appearance::kSyncedDataDirEnv);
+      }
+    }
+
+    ScopedStateDirectory(const ScopedStateDirectory&) = delete;
+    ScopedStateDirectory& operator=(const ScopedStateDirectory&) = delete;
+
+  private:
+    std::optional<std::string> previous;
+  };
+
   [[nodiscard]] bool validate(
       const Fixture& fixture, const std::filesystem::path& stagingDirectory, const std::optional<uid_t> invokingUid,
       std::string& error
@@ -93,6 +124,51 @@ namespace {
     passed = false;
   }
 
+  void expectFillMode(
+      const std::string_view name, const std::string_view value, const std::optional<WallpaperFillMode> expected,
+      bool& passed
+  ) {
+    const auto actual = greeter::appearance::parseFillMode(value);
+    if (actual == expected) {
+      return;
+    }
+    std::cerr << name << ": unexpected fill-mode parse result\n";
+    passed = false;
+  }
+
+  void writeSpanSyncToml(const std::filesystem::path& path) {
+    std::ofstream(path, std::ios::trunc) << R"toml(
+[appearance]
+scheme = "Synced"
+
+[appearance.wallpaper]
+path = "color:#010203"
+fill_mode = "span"
+
+[appearance.wallpapers.DP-1]
+path = "color:#040506"
+fill_mode = "span"
+
+[appearance.palette]
+primary = "#010101"
+on_primary = "#020202"
+secondary = "#030303"
+on_secondary = "#040404"
+tertiary = "#050505"
+on_tertiary = "#060606"
+error = "#070707"
+on_error = "#080808"
+surface = "#090909"
+on_surface = "#101010"
+surface_variant = "#111111"
+on_surface_variant = "#121212"
+outline = "#131313"
+shadow = "#141414"
+hover = "#151515"
+on_hover = "#161616"
+)toml";
+  }
+
 } // namespace
 
 int main() {
@@ -100,6 +176,168 @@ int main() {
   std::string error;
 
   try {
+    expectFillMode("center fill mode", "center", WallpaperFillMode::Center, passed);
+    expectFillMode("crop fill mode", "crop", WallpaperFillMode::Crop, passed);
+    expectFillMode("fit fill mode", "fit", WallpaperFillMode::Fit, passed);
+    expectFillMode("stretch fill mode", "stretch", WallpaperFillMode::Stretch, passed);
+    expectFillMode("repeat fill mode", "repeat", WallpaperFillMode::Repeat, passed);
+    expectFillMode("span fill mode", "span", WallpaperFillMode::Span, passed);
+    expectFillMode("invalid fill mode", "tile", std::nullopt, passed);
+
+    {
+      Fixture fixture(0700, 0600);
+      std::ofstream(fixture.runtimeDirectory / "greeter.toml") << R"toml(
+[appearance]
+scheme = "Noctalia"
+
+[appearance.wallpaper]
+path = "/nix/store/example-wallpaper.png"
+fill_mode = "center"
+)toml";
+
+      const ScopedStateDirectory stateDirectory(fixture.runtimeDirectory);
+      const auto appearance = loadGreeterWallpaperAppearance();
+      const auto wallpaper = appearance.has_value() ? appearance->wallpaperForOutput("") : std::nullopt;
+      expect("wallpaper loads without synced palette", wallpaper.has_value(), true, {}, passed);
+      expect(
+          "wallpaper path loads without synced palette",
+          wallpaper.has_value() && wallpaper->path == "/nix/store/example-wallpaper.png", true, {}, passed
+      );
+      expect(
+          "wallpaper mode loads without synced palette",
+          wallpaper.has_value() && wallpaper->fillMode == WallpaperFillMode::Center, true, {}, passed
+      );
+    }
+
+    {
+      Fixture fixture(0700, 0600);
+      std::ofstream(fixture.runtimeDirectory / "greeter.toml") << R"toml(
+[appearance]
+scheme = "Noctalia"
+
+[appearance.wallpaper]
+fill_color = "#ff0000"
+)toml";
+
+      const ScopedStateDirectory stateDirectory(fixture.runtimeDirectory);
+      const auto appearance = loadGreeterWallpaperAppearance();
+      const auto wallpaper = appearance.has_value() ? appearance->wallpaperForOutput("") : std::nullopt;
+      const bool isRed = wallpaper.has_value() && wallpaper->path.empty() && wallpaper->fillColor == rgbHex(0xff0000);
+      expect("fill-only wallpaper loads without synced palette", isRed, true, {}, passed);
+    }
+
+    {
+      Fixture fixture(0700, 0600);
+      std::ofstream(fixture.runtimeDirectory / "greeter.toml") << R"toml(
+[clock]
+enabled = false
+position = "bottom-center"
+time_format = ""
+date_format = "{:%F}"
+)toml";
+
+      const ScopedStateDirectory stateDirectory(fixture.runtimeDirectory);
+      const auto preferences = greeter::loadGreeterPreferences();
+      expect("clock enabled parses", preferences.clockEnabled, false, {}, passed);
+      expect("clock position parses", preferences.clockPosition == "bottom-center", true, {}, passed);
+      expect("empty clock format is preserved", preferences.clockTimeFormat.empty(), true, {}, passed);
+      expect("clock date format parses", preferences.clockDateFormat == "{:%F}", true, {}, passed);
+
+      const auto configPath = fixture.runtimeDirectory / "greeter.toml";
+      const auto config = greeter::config::loadConfig(configPath);
+      expect("clock config rewrites", greeter::config::writeConfig(configPath, config), true, {}, passed);
+      const auto rewritten = greeter::config::loadConfig(configPath);
+      expect(
+          "empty clock format survives rewrite",
+          rewritten.clockTimeFormat.has_value() && rewritten.clockTimeFormat->empty(), true, {}, passed
+      );
+    }
+
+    {
+      Fixture fixture(0700, 0600);
+      std::ofstream(fixture.runtimeDirectory / "greeter.toml") << R"toml(
+[output]
+name = "Acer Technologies XV242Y TL1EE0018521"
+width = 1920
+height = 1080
+refresh_rate = 120
+)toml";
+
+      greeter_compositor_config config{};
+      greeter_compositor_config_load(fixture.runtimeDirectory.c_str(), &config);
+      expect(
+          "stable output identifier parses",
+          std::string_view(config.preferred_output) == "Acer Technologies XV242Y TL1EE0018521", true, {}, passed
+      );
+      expect("output width parses", config.manual_mode_width == 1920, true, {}, passed);
+      expect("output height parses", config.manual_mode_height == 1080, true, {}, passed);
+      expect("output refresh rate parses", config.manual_mode_refresh_mhz == 120000, true, {}, passed);
+    }
+
+    {
+      Fixture fixture(0700, 0600);
+      const ScopedStateDirectory stateDirectory(fixture.runtimeDirectory);
+      const std::string layout = "Dell Inc. DELL U2723QE ABC123:0,0; LG Electronics LG HDR 4K XYZ789:2560,0";
+      const bool applied = greeter::applyAppearanceSyncGreeterConf(
+          layout, "Dell Inc. DELL U2723QE ABC123:normal; LG Electronics LG HDR 4K XYZ789:90",
+          "Dell Inc. DELL U2723QE ABC123:1.25; LG Electronics LG HDR 4K XYZ789:1.5", std::nullopt
+      );
+      expect("stable output mappings with spaces are accepted", applied, true, {}, passed);
+
+      const auto placements = greeter::loadGreeterOutputLayout();
+      expect("two stable layout entries parse", placements.size() == 2, true, {}, passed);
+      expect(
+          "first stable layout identifier is preserved",
+          placements.size() == 2 && placements[0].name == "Dell Inc. DELL U2723QE ABC123", true, {}, passed
+      );
+      expect(
+          "second stable layout coordinates parse",
+          placements.size() == 2 && placements[1].x == 2560 && placements[1].y == 0, true, {}, passed
+      );
+    }
+
+    {
+      Fixture fixture(0700, 0600);
+      std::ofstream(fixture.runtimeDirectory / "greeter.toml") << R"toml(
+[output]
+refresh_rate = "DP-1:120; HDMI-A-1:60"
+)toml";
+
+      greeter_compositor_config config{};
+      greeter_compositor_config_load(fixture.runtimeDirectory.c_str(), &config);
+      expect(
+          "per-output refresh rates parse", std::string_view(config.output_refresh_rate_map) == "DP-1:120; HDMI-A-1:60",
+          true, {}, passed
+      );
+      expect("refresh map is not a global rate", config.manual_mode_refresh_mhz == 0, true, {}, passed);
+    }
+
+    {
+      Fixture fixture(0700, 0600);
+      writeSpanSyncToml(fixture.syncFile);
+      greeter::config::clearConfigDiagnostics();
+      const auto sync = greeter::config::loadSync(fixture.syncFile);
+      expect("span sync.toml parses cleanly", greeter::config::configDiagnostics().empty(), true, {}, passed);
+
+      const bool defaultSpan = sync.appearance.wallpaper.has_value()
+          && sync.appearance.wallpaper->fillMode.has_value()
+          && greeter::appearance::parseFillMode(*sync.appearance.wallpaper->fillMode) == WallpaperFillMode::Span;
+      expect("default staged span wallpaper", defaultSpan, true, {}, passed);
+
+      const auto outputWallpaper = sync.appearance.wallpapers.find("DP-1");
+      const bool outputSpan = outputWallpaper != sync.appearance.wallpapers.end()
+          && outputWallpaper->second.fillMode.has_value()
+          && greeter::appearance::parseFillMode(*outputWallpaper->second.fillMode) == WallpaperFillMode::Span;
+      expect("per-output staged span wallpaper", outputSpan, true, {}, passed);
+
+      error.clear();
+      expect(
+          "constrained sync accepts default and per-output span",
+          greeter::secure_sync::detail::validateConstrainedPayloadForTesting(fixture.stagingDirectory, error), true,
+          error, passed
+      );
+    }
+
     {
       // Noctalia 5.0.1 inherits umask. With umask 0002 it creates this
       // 0775 directory and 0664 payload beneath its private 0700 runtime dir.

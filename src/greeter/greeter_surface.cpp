@@ -22,6 +22,7 @@
 #include "render/scene/rect_node.h"
 #include "render/scene/wallpaper_node.h"
 #include "theme/builtin_palettes.h"
+#include "time/time_format.h"
 #include "ui/controls/box.h"
 #include "ui/controls/button.h"
 #include "ui/controls/glyph.h"
@@ -106,7 +107,11 @@ namespace {
             || sym == 'x'
             || sym == 'X'
             || sym == XKB_KEY_x
-            || sym == XKB_KEY_X);
+            || sym == XKB_KEY_X
+            || sym == 'u'
+            || sym == 'U'
+            || sym == XKB_KEY_u
+            || sym == XKB_KEY_U);
   }
 
   void appendDummyUsers(std::vector<std::string>& users, std::vector<uid_t>& uids) {
@@ -206,6 +211,7 @@ void GreeterSurface::initialize(RenderContext* context) {
   auto wallpaper = std::make_unique<WallpaperNode>();
   m_wallpaper = wallpaper.get();
   m_wallpaper->setZIndex(0);
+  m_wallpaper->setSpan(m_wallpaperSpanParams);
   m_root.addChild(std::move(wallpaper));
 
   auto backdrop = std::make_unique<RectNode>();
@@ -225,6 +231,24 @@ void GreeterSurface::initialize(RenderContext* context) {
   bottomLogo->setZIndex(2);
   m_bottomBrandLogo = bottomLogo.get();
   m_root.addChild(std::move(bottomLogo));
+
+  auto clockTime = std::make_unique<Label>();
+  clockTime->setFontSize(Style::scaled(48.0f));
+  clockTime->setTextAlign(TextAlign::Center);
+  clockTime->setColor(colorForRole(ColorRole::OnSurface));
+  clockTime->setVisible(false);
+  m_clockTimeLabel = clockTime.get();
+  m_clockTimeLabel->setZIndex(5);
+  m_root.addChild(std::move(clockTime));
+
+  auto clockDate = std::make_unique<Label>();
+  clockDate->setFontSize(Style::fontSizeBody());
+  clockDate->setTextAlign(TextAlign::Center);
+  clockDate->setColor(colorForRole(ColorRole::OnSurfaceVariant));
+  clockDate->setVisible(false);
+  m_clockDateLabel = clockDate.get();
+  m_clockDateLabel->setZIndex(5);
+  m_root.addChild(std::move(clockDate));
 
   auto formSubtitle = std::make_unique<Label>();
   formSubtitle->setFontSize(Style::fontSizeTitle());
@@ -589,6 +613,7 @@ void GreeterSurface::initialize(RenderContext* context) {
   loadSessions();
   buildSchemeNames();
   loadPreferences();
+  (void)updateClock();
   if (m_selectedScheme >= m_schemeNames.size()) {
     if (const auto fallback = findSchemeIndex("Noctalia")) {
       m_selectedScheme = *fallback;
@@ -626,7 +651,9 @@ void GreeterSurface::initialize(RenderContext* context) {
     if (m_bottomBrandLogo != nullptr && m_brandLogoTexture.id != 0) {
       m_bottomBrandLogo->setTextureId(m_brandLogoTexture.id);
       m_bottomBrandLogo->setTextureSize(m_brandLogoTexture.width, m_brandLogoTexture.height);
-      m_bottomBrandLogo->setTint(colorForRole(ColorRole::OnSurface, 0.90f));
+      // Keep the multicolor brand artwork intact. Palette tinting, especially
+      // with a light theme's dark on-surface color, crushes its colors.
+      m_bottomBrandLogo->setTint(rgba(1.0f, 1.0f, 1.0f, 1.0f));
     } else {
       kLog.warn("failed loading logo texture from {}", logoPath.string());
     }
@@ -978,6 +1005,25 @@ void GreeterSurface::prepareFrame(std::uint32_t width, std::uint32_t height, boo
   }
 }
 
+bool GreeterSurface::updateClock() {
+  if (m_clockTimeLabel == nullptr || m_clockDateLabel == nullptr) {
+    return false;
+  }
+
+  const auto now = std::chrono::floor<std::chrono::seconds>(std::chrono::system_clock::now());
+  const std::int64_t second = std::chrono::duration_cast<std::chrono::seconds>(now.time_since_epoch()).count();
+  if (m_lastClockSecond.has_value() && *m_lastClockSecond == second) {
+    return false;
+  }
+  m_lastClockSecond = second;
+
+  const std::string time = m_clockEnabled ? formatLocalUnixTime(second, m_clockTimeFormat) : std::string{};
+  const std::string date = m_clockEnabled ? formatLocalUnixTime(second, m_clockDateFormat) : std::string{};
+  const bool timeChanged = m_clockTimeLabel->setText(time);
+  const bool dateChanged = m_clockDateLabel->setText(date);
+  return timeChanged || dateChanged;
+}
+
 void GreeterSurface::syncScaledTypography() {
   if (m_headerUserGlyph != nullptr) {
     m_headerUserGlyph->setGlyphSize(Style::scaled(kHeaderUserIconBase));
@@ -992,6 +1038,8 @@ void GreeterSurface::syncScaledTypography() {
   m_sessionSelectGlyph->setGlyphSize(Style::fontSizeBody());
   m_schemeSelectLabel->setFontSize(Style::fontSizeBody());
   m_schemeSelectGlyph->setGlyphSize(Style::fontSizeBody());
+  m_clockTimeLabel->setFontSize(Style::scaled(48.0f));
+  m_clockDateLabel->setFontSize(Style::fontSizeBody());
   m_loginButton->setGlyphSize(Style::fontSizeTitle());
   m_backButton->setGlyphSize(Style::fontSizeTitle());
   m_statusLabel->setFontSize(Style::fontSizeCaption());
@@ -1049,7 +1097,7 @@ void GreeterSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
 
   m_backdrop->setPosition(ox, oy);
   m_backdrop->setSize(sw, sh);
-  if (m_hasSyncedWallpaper) {
+  if (m_hasWallpaper) {
     // WallpaperNode draws the image and any letterbox fill; keep backdrop
     // hidden so we do not paint wallpaperFillColor as a full-screen overlay on
     // top.
@@ -1072,7 +1120,7 @@ void GreeterSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
       const float logoSize = Style::scaled(64.0f);
       m_bottomBrandLogo->setSize(logoSize, logoSize);
       m_bottomBrandLogo->setPosition(ox + std::round((sw - logoSize) * 0.5f), oy + sh - logoSize - Style::spaceLg());
-      m_bottomBrandLogo->setTint(colorForRole(ColorRole::OnSurface, 0.88f));
+      m_bottomBrandLogo->setTint(rgba(1.0f, 1.0f, 1.0f, 1.0f));
     }
   }
 
@@ -1253,6 +1301,7 @@ void GreeterSurface::layoutScene(std::uint32_t width, std::uint32_t height) {
   }
 
   layoutPowerButtons(ox, oy, sw, sh);
+  layoutClock(ox, oy, sw, sh, panelX, panelY, panelWidth, panelHeight);
 
   if (!m_passwordVisible && showsUserDropdown()) {
     layoutPanelUserSelector(contentLeft, contentTop, contentWidth, rowHeight);
@@ -1580,10 +1629,10 @@ void GreeterSurface::beginSessionStart() {
   }
 
   // greetd cmd is argv; Exec= may be multiple tokens (e.g. "dbus-run-session gnome-session").
+  // x11 sessions are wrapped in noctalia-greeter-xsession to bootstrap Xorg first.
   {
-    std::istringstream stream(session.command);
-    std::string token;
-    if (!(stream >> token) || token.empty()) {
+    const std::vector<std::string> argv = greeter::sessionArgv(session);
+    if (argv.empty()) {
       kLog.error("session '{}' has empty Exec", session.name);
       m_authenticating = false;
       clearPasswordInput();
@@ -1595,10 +1644,8 @@ void GreeterSurface::beginSessionStart() {
       commitImmediateFrame(false);
       return;
     }
-    cmd.command = token;
-    while (stream >> token) {
-      cmd.arguments.push_back(token);
-    }
+    cmd.command = argv.front();
+    cmd.arguments.assign(argv.begin() + 1, argv.end());
   }
   cmd.environment = greeter::sessionStartEnvironment(session);
   {
@@ -1812,6 +1859,7 @@ void GreeterSurface::refreshSelectionLabels() {
 void GreeterSurface::buildSchemeNames() {
   m_schemeNames.clear();
   m_syncedAppearance = loadGreeterSyncedAppearance();
+  m_wallpaperAppearance = loadGreeterWallpaperAppearance();
   if (m_syncedAppearance.has_value()) {
     m_schemeNames.emplace_back(greeter::appearance::kSyncedSchemeDisplayName);
     m_selectedScheme = 0;
@@ -1844,16 +1892,23 @@ void GreeterSurface::setBoundOutputName(std::string outputName) {
     return;
   }
   m_boundOutputName = std::move(outputName);
-  // Re-resolve synced wallpaper for this connector after binding.
-  if (isSyncedScheme(m_selectedScheme)) {
-    applyScheme(m_selectedScheme);
-    requestLayout();
+  applyConfiguredWallpaper();
+  requestLayout();
+}
+
+void GreeterSurface::setWallpaperSpanParams(const WallpaperSpanParams& params) {
+  if (m_wallpaperSpanParams == params) {
+    return;
   }
+  m_wallpaperSpanParams = params;
+  if (m_wallpaper != nullptr) {
+    m_wallpaper->setSpan(params);
+  }
+  requestRedraw();
 }
 
 void GreeterSurface::clearWallpaperDisplay() {
-
-  m_hasSyncedWallpaper = false;
+  m_hasWallpaper = false;
   m_wallpaperPath.clear();
   m_wallpaperFillMode = WallpaperFillMode::Crop;
   m_wallpaperFillColor = rgba(0.0f, 0.0f, 0.0f, 0.0f);
@@ -1874,6 +1929,25 @@ void GreeterSurface::applyWallpaperBackdrop(const Palette& sourcePalette) {
   Color tint = sourcePalette.surface;
   tint.a = m_tintIntensity;
   m_wallpaper->setTintColor(tint);
+}
+
+void GreeterSurface::applyConfiguredWallpaper() {
+  if (!m_wallpaperAppearance.has_value()) {
+    clearWallpaperDisplay();
+    return;
+  }
+
+  const auto wallpaper = m_wallpaperAppearance->wallpaperForOutput(m_boundOutputName);
+  if (!wallpaper.has_value()) {
+    clearWallpaperDisplay();
+    return;
+  }
+
+  m_wallpaperPath = wallpaper->path;
+  m_wallpaperFillMode = wallpaper->fillMode;
+  m_wallpaperFillColor = wallpaper->fillColor;
+  m_hasWallpaper = !m_wallpaperPath.empty() || m_wallpaperFillColor.a > 0.0f;
+  m_wallpaperDirty = true;
 }
 
 void GreeterSurface::applyScheme(const std::size_t schemeIndex) {
@@ -1898,12 +1972,7 @@ void GreeterSurface::applyScheme(const std::size_t schemeIndex) {
     if (m_renderContext != nullptr && !m_syncedAppearance->fontFamily.empty()) {
       m_renderContext->setTextFontFamily(m_syncedAppearance->fontFamily);
     }
-    const auto wallpaper = m_syncedAppearance->wallpaperForOutput(m_boundOutputName);
-    m_wallpaperPath = wallpaper.path;
-    m_wallpaperFillMode = wallpaper.fillMode;
-    m_wallpaperFillColor = wallpaper.fillColor;
-    m_hasSyncedWallpaper = !m_wallpaperPath.empty();
-    m_wallpaperDirty = true;
+    applyConfiguredWallpaper();
     applyWallpaperBackdrop(m_syncedAppearance->palette);
     return;
   }
@@ -1912,7 +1981,7 @@ void GreeterSurface::applyScheme(const std::size_t schemeIndex) {
     setPalette(builtinPalette->dark.palette);
   }
   Style::setCornerRadiusScale(1.0f);
-  clearWallpaperDisplay();
+  applyConfiguredWallpaper();
 }
 
 void GreeterSurface::syncHeaderUserAvatar(
@@ -1924,15 +1993,19 @@ void GreeterSurface::syncHeaderUserAvatar(
       && m_headerUserAvatar != nullptr
       && m_renderContext != nullptr;
   const std::string iconPath = canShowAvatar ? m_userIconPaths[m_selectedUser] : std::string{};
+  // size is logical; decode at buffer resolution so HiDPI outputs stay sharp.
+  const int avatarPixelSize = canShowAvatar ? static_cast<int>(std::lround(size * m_renderContext->renderScale())) : 0;
 
-  if (canShowAvatar && !iconPath.empty() && iconPath != m_loadedHeaderAvatarPath) {
+  if (canShowAvatar
+      && !iconPath.empty()
+      && (iconPath != m_loadedHeaderAvatarPath || avatarPixelSize != m_loadedHeaderAvatarPixelSize)) {
     if (m_headerAvatarTexture.id != 0) {
       m_renderContext->textureManager().unload(m_headerAvatarTexture);
       m_headerAvatarTexture = {};
     }
     m_loadedHeaderAvatarPath = iconPath;
-    m_headerAvatarTexture =
-        m_renderContext->textureManager().loadFromFile(iconPath, static_cast<int>(std::lround(size)), true);
+    m_loadedHeaderAvatarPixelSize = avatarPixelSize;
+    m_headerAvatarTexture = m_renderContext->textureManager().loadFromFile(iconPath, avatarPixelSize, true);
   }
 
   if (!canShowAvatar || iconPath.empty() || m_headerAvatarTexture.id == 0) {
@@ -1980,6 +2053,20 @@ void GreeterSurface::syncWallpaperTexture() {
     m_wallpaperTexture = {};
   }
 
+  const auto useFillColor = [this]() {
+    if (m_wallpaperFillColor.a <= 0.0f) {
+      return false;
+    }
+    m_wallpaper->setSources(
+        WallpaperSourceKind::Color, {}, m_wallpaperFillColor, WallpaperSourceKind::Color, {}, m_wallpaperFillColor,
+        0.0f, 0.0f, 0.0f, 0.0f
+    );
+    m_wallpaper->setTransition(WallpaperTransition::Fade, 0.0f, TransitionParams{});
+    m_wallpaper->setFillMode(m_wallpaperFillMode);
+    m_wallpaper->setFillColor(m_wallpaperFillColor);
+    return true;
+  };
+
   Color color;
   if (parseColorWallpaperPath(m_wallpaperPath, color)) {
     m_wallpaper->setSources(
@@ -2001,12 +2088,18 @@ void GreeterSurface::syncWallpaperTexture() {
         m_wallpaper->setFillMode(m_wallpaperFillMode);
         m_wallpaper->setFillColor(m_wallpaperFillColor);
       } else {
-        m_wallpaper->setTextures({}, {}, 0.0f, 0.0f, 0.0f, 0.0f);
+        if (!useFillColor()) {
+          m_wallpaper->setTextures({}, {}, 0.0f, 0.0f, 0.0f, 0.0f);
+          m_hasWallpaper = false;
+        }
       }
     } else {
-      m_wallpaper->setTextures({}, {}, 0.0f, 0.0f, 0.0f, 0.0f);
+      if (!useFillColor()) {
+        m_wallpaper->setTextures({}, {}, 0.0f, 0.0f, 0.0f, 0.0f);
+        m_hasWallpaper = false;
+      }
     }
-  } else {
+  } else if (!useFillColor()) {
     m_wallpaper->setTextures({}, {}, 0.0f, 0.0f, 0.0f, 0.0f);
   }
 
@@ -2039,6 +2132,10 @@ void GreeterSurface::loadPreferences() {
   m_hideLogo = prefs.hideLogo;
   m_powerButtonsPosition = prefs.powerButtonsPosition.value_or("bottom-right");
   m_schemeSelectorPosition = prefs.schemeSelectorPosition.value_or("top-right");
+  m_clockEnabled = prefs.clockEnabled;
+  m_clockPosition = prefs.clockPosition;
+  m_clockTimeFormat = prefs.clockTimeFormat;
+  m_clockDateFormat = prefs.clockDateFormat;
 }
 
 void GreeterSurface::savePreferences() const {
@@ -2126,14 +2223,33 @@ void GreeterSurface::closeMenus() {
   clearSchemeMenu();
 }
 
+InputArea* GreeterSurface::menuReturnFocusTarget() const {
+  // The session and scheme selectors are a detour from the only control that
+  // matters on the password step, and the pointer path cannot infer this from the
+  // previous focus: a click focuses the selector before its handler runs, so
+  // "where focus was" is already the selector itself. Naming the password field
+  // outright keeps keyboard, focus-ring and pointer opens behaving alike.
+  if (!m_passwordVisible || m_passwordField == nullptr) {
+    return nullptr;
+  }
+  return m_passwordField->inputArea();
+}
+
 void GreeterSurface::closeMenusAndRestoreFocus() {
   InputArea* owner = m_userMenuOpen ? m_userSelectArea
       : m_sessionMenuOpen           ? m_sessionSelectArea
       : m_schemeMenuOpen            ? m_schemeSelectArea
                                     : nullptr;
+  InputArea* target = owner;
+  // The user menu belongs to the step before the password field exists.
+  if (m_sessionMenuOpen || m_schemeMenuOpen) {
+    if (InputArea* passwordArea = menuReturnFocusTarget(); passwordArea != nullptr) {
+      target = passwordArea;
+    }
+  }
   closeMenus();
-  if (owner != nullptr) {
-    m_inputDispatcher.setFocus(owner);
+  if (target != nullptr) {
+    m_inputDispatcher.setFocus(target);
   }
   requestLayout();
 }
@@ -2147,8 +2263,12 @@ void GreeterSurface::selectSession(std::size_t index) {
   savePreferences();
   m_sessionMenuOpen = false;
   m_menuHighlight = -1;
-  if (m_sessionSelectArea != nullptr) {
-    m_inputDispatcher.setFocus(m_sessionSelectArea);
+  InputArea* sessionFocus = menuReturnFocusTarget();
+  if (sessionFocus == nullptr) {
+    sessionFocus = m_sessionSelectArea;
+  }
+  if (sessionFocus != nullptr) {
+    m_inputDispatcher.setFocus(sessionFocus);
   }
   notifyStateChanged();
   commitImmediateFrame(true);
@@ -2163,8 +2283,12 @@ void GreeterSurface::selectScheme(std::size_t index) {
   savePreferences();
   m_schemeMenuOpen = false;
   m_menuHighlight = -1;
-  if (m_schemeSelectArea != nullptr) {
-    m_inputDispatcher.setFocus(m_schemeSelectArea);
+  InputArea* schemeFocus = menuReturnFocusTarget();
+  if (schemeFocus == nullptr) {
+    schemeFocus = m_schemeSelectArea;
+  }
+  if (schemeFocus != nullptr) {
+    m_inputDispatcher.setFocus(schemeFocus);
   }
   notifyStateChanged();
   commitImmediateFrame(true);
@@ -2556,11 +2680,14 @@ void GreeterSurface::layoutPowerButtons(float ox, float oy, float sw, float sh) 
 
   // Determine anchor position based on config
   float y;
+  const bool sharesSchemeCorner =
+      m_schemeSelectorPosition != "hidden" && m_powerButtonsPosition == m_schemeSelectorPosition;
+  const float schemeOffset = sharesSchemeCorner ? Style::controlHeightSm() + gap : 0.0f;
   if (m_powerButtonsPosition == "top-left" || m_powerButtonsPosition == "top-right") {
-    y = oy + margin;
+    y = oy + margin + schemeOffset;
   } else {
     // Default: bottom-left or bottom-right
-    y = oy + sh - size - margin;
+    y = oy + sh - size - margin - schemeOffset;
   }
 
   const auto place = [&](Button* btn, float x) {
@@ -2607,6 +2734,134 @@ void GreeterSurface::layoutPowerButtons(float ox, float oy, float sw, float sh) 
       place(m_firmwareButton, x);
     }
   }
+}
+
+void GreeterSurface::layoutClock(
+    const float ox, const float oy, const float sw, const float sh, const float panelX, const float panelY,
+    const float panelWidth, const float panelHeight
+) {
+  if (m_renderContext == nullptr || m_clockTimeLabel == nullptr || m_clockDateLabel == nullptr) {
+    return;
+  }
+  if (!m_clockEnabled || (m_clockTimeLabel->text().empty() && m_clockDateLabel->text().empty())) {
+    m_clockTimeLabel->setVisible(false);
+    m_clockDateLabel->setVisible(false);
+    return;
+  }
+
+  m_clockTimeLabel->setVisible(!m_clockTimeLabel->text().empty());
+  m_clockDateLabel->setVisible(!m_clockDateLabel->text().empty());
+  m_clockTimeLabel->setColor(colorForRole(ColorRole::OnSurface));
+  m_clockDateLabel->setColor(colorForRole(ColorRole::OnSurfaceVariant));
+
+  const float margin = Style::spaceLg();
+  const float lineGap = Style::spaceXs();
+  const float widthLimit = std::max(1.0f, std::min(panelWidth, sw - margin * 2.0f));
+  m_clockTimeLabel->setMaxWidth(widthLimit);
+  m_clockDateLabel->setMaxWidth(widthLimit);
+  if (m_clockTimeLabel->visible()) {
+    m_clockTimeLabel->measure(*m_renderContext);
+  }
+  if (m_clockDateLabel->visible()) {
+    m_clockDateLabel->measure(*m_renderContext);
+  }
+  const float blockWidth = std::max(
+      m_clockTimeLabel->visible() ? m_clockTimeLabel->width() : 0.0f,
+      m_clockDateLabel->visible() ? m_clockDateLabel->width() : 0.0f
+  );
+
+  const auto blockHeight = [this, lineGap]() {
+    const float timeHeight = m_clockTimeLabel->visible() ? m_clockTimeLabel->height() : 0.0f;
+    const float dateHeight = m_clockDateLabel->visible() ? m_clockDateLabel->height() : 0.0f;
+    return timeHeight + dateHeight + (m_clockTimeLabel->visible() && m_clockDateLabel->visible() ? lineGap : 0.0f);
+  };
+
+  float totalHeight = blockHeight();
+  float blockX = panelX + (panelWidth - blockWidth) * 0.5f;
+  float blockY = 0.0f;
+  if (m_clockPosition == "above-panel") {
+    float minimumY = oy + margin;
+    if (m_configErrorBanner != nullptr && m_configErrorBanner->visible()) {
+      minimumY = std::max(minimumY, m_configErrorBanner->y() + m_configErrorBanner->height() + Style::spaceSm());
+    }
+    blockY = panelY - totalHeight - Style::spaceXl();
+    if (blockY < minimumY && m_clockDateLabel->visible()) {
+      m_clockDateLabel->setVisible(false);
+      totalHeight = blockHeight();
+      blockY = panelY - totalHeight - Style::spaceXl();
+    }
+    if (blockY < minimumY) {
+      m_clockTimeLabel->setVisible(false);
+      m_clockDateLabel->setVisible(false);
+      return;
+    }
+  } else if (m_clockPosition == "top-center" || m_clockPosition == "bottom-center") {
+    const bool onBottom = m_clockPosition == "bottom-center";
+    blockX = ox + (sw - blockWidth) * 0.5f;
+    if (onBottom) {
+      const float logoTop =
+          m_bottomBrandLogo != nullptr && m_bottomBrandLogo->visible() ? m_bottomBrandLogo->y() : oy + sh - margin;
+      blockY = logoTop
+          - totalHeight
+          - (m_bottomBrandLogo != nullptr && m_bottomBrandLogo->visible() ? Style::spaceSm() : 0.0f);
+      const float maximumPanelY = panelY + panelHeight + Style::spaceXl();
+      if (blockY < maximumPanelY && m_clockDateLabel->visible()) {
+        m_clockDateLabel->setVisible(false);
+        totalHeight = blockHeight();
+        blockY = logoTop
+            - totalHeight
+            - (m_bottomBrandLogo != nullptr && m_bottomBrandLogo->visible() ? Style::spaceSm() : 0.0f);
+      }
+      if (blockY < maximumPanelY) {
+        m_clockTimeLabel->setVisible(false);
+        m_clockDateLabel->setVisible(false);
+        return;
+      }
+    } else {
+      blockY = oy + margin;
+      if (m_configErrorBanner != nullptr && m_configErrorBanner->visible()) {
+        blockY = m_configErrorBanner->y() + m_configErrorBanner->height() + Style::spaceSm();
+      }
+      const float panelLimit = panelY - Style::spaceXl();
+      if (blockY + totalHeight > panelLimit && m_clockDateLabel->visible()) {
+        m_clockDateLabel->setVisible(false);
+        totalHeight = blockHeight();
+      }
+      if (blockY + totalHeight > panelLimit) {
+        m_clockTimeLabel->setVisible(false);
+        m_clockDateLabel->setVisible(false);
+        return;
+      }
+    }
+  } else {
+    const bool onRight = m_clockPosition == "top-right" || m_clockPosition == "bottom-right";
+    const bool onBottom = m_clockPosition == "bottom-left" || m_clockPosition == "bottom-right";
+    float occupied = 0.0f;
+    if (m_schemeSelectorPosition != "hidden" && m_schemeSelectorPosition == m_clockPosition) {
+      occupied += Style::controlHeightSm() + Style::spaceSm();
+    }
+    if (m_powerButtonsPosition != "hidden" && m_powerButtonsPosition == m_clockPosition) {
+      occupied += Style::controlHeight() + Style::spaceSm();
+    }
+    blockX = onRight ? ox + sw - margin - blockWidth : ox + margin;
+    blockY = onBottom ? oy + sh - margin - occupied - totalHeight : oy + margin + occupied;
+    if (blockY < oy + margin || blockY + totalHeight > oy + sh - margin) {
+      m_clockTimeLabel->setVisible(false);
+      m_clockDateLabel->setVisible(false);
+      return;
+    }
+  }
+
+  float y = blockY;
+  const auto placeCentered = [blockX, blockWidth, &y](Label* label, const float followingGap) {
+    if (label == nullptr || !label->visible()) {
+      return;
+    }
+    label->setPosition(std::round(blockX + (blockWidth - label->width()) * 0.5f), std::round(y));
+    y += label->height() + followingGap;
+  };
+  placeCentered(m_clockTimeLabel, m_clockDateLabel->visible() ? lineGap : 0.0f);
+  placeCentered(m_clockDateLabel, 0.0f);
 }
 
 void GreeterSurface::setFocusIndex(std::ptrdiff_t index) {

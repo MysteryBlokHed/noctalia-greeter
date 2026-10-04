@@ -53,7 +53,7 @@ namespace greeter::config {
     // Sync never provides these, so they are declarative-only.
     std::optional<float> appearanceBlurIntensity;
     std::optional<float> appearanceTintIntensity;
-    // Optional palette/wallpaper/font; wins over Sync sync.toml when complete.
+    // Optional palette/wallpaper/font; declarative values win over matching Sync values.
     GreeterTomlAppearance appearance;
 
     std::optional<std::string> outputName;
@@ -61,6 +61,8 @@ namespace greeter::config {
     std::optional<float> outputScale;
     std::optional<int> outputModeWidth;
     std::optional<int> outputModeHeight;
+    std::optional<float> outputRefreshRate;
+    std::optional<std::string> outputRefreshRateMap;
     std::optional<std::string> outputTransforms;
     // Per-connector scales (NAME:1.25; ...). Distinct from global outputScale.
     std::optional<std::string> outputScales;
@@ -78,6 +80,11 @@ namespace greeter::config {
 
     std::optional<bool> authAllowEmptyPassword;
     std::optional<int> authRequestTimeoutSec;
+
+    std::optional<bool> clockEnabled;
+    std::optional<std::string> clockPosition;
+    std::optional<std::string> clockTimeFormat;
+    std::optional<std::string> clockDateFormat;
   };
 
   // Sync + UI mutable file (sync.toml). Never managed by Nix. Loses to greeter.toml.

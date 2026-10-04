@@ -67,7 +67,11 @@ legacy path.
 
 Sync installs wallpaper files under `/var/lib/noctalia-greeter/` and merges appearance and output values into `/var/lib/noctalia-greeter/sync.toml`. It never overwrites declarative `greeter.toml`.
 
-When the same value exists in both files, `greeter.toml` wins. In particular, a complete `[appearance.palette]` in `greeter.toml` selects that entire declarative appearance, including its wallpaper settings, ahead of the appearance in `sync.toml`.
+When the same value exists in both files, `greeter.toml` wins. Palette and
+wallpaper precedence are resolved independently: a complete
+`[appearance.palette]` selects the declarative **Synced** colors, while
+`[appearance.wallpaper]` and per-output wallpaper values override matching
+Sync wallpaper values even when a built-in color scheme is selected.
 
 With a current Shell and greeter:
 
@@ -80,7 +84,12 @@ With a current Shell and greeter:
 
 Each greeter view uses the wallpaper for its connector when one exists, then falls back to `[appearance.wallpaper]`. A connector pinned with `[output].name` uses its matching entry. See [Displays](displays.md) for connector and layout settings.
 
-You do not need to add wallpaper keys to `greeter.toml` for Sync. To override them declaratively, use an absolute image path or `color:#RRGGBB`; `fill_mode` accepts `center`, `crop`, `fit`, `stretch`, or `repeat`:
+You do not need to add wallpaper keys to `greeter.toml` for Sync. To override
+them declaratively, use an absolute image path or `color:#RRGGBB`; `fill_color`
+can also be used by itself for a solid background. Wallpaper settings do not
+require a complete palette and apply with both built-in and **Synced** color
+schemes. `fill_mode` accepts `center`, `crop`, `fit`, `stretch`, `repeat`, or
+`span`:
 
 ```toml
 [appearance.wallpaper]
@@ -91,6 +100,14 @@ fill_mode = "crop"
 path = "/var/lib/noctalia-greeter/wallpaper-DP-2.webp"
 fill_mode = "crop"
 ```
+
+`span` treats all active greeter outputs as one logical desktop and gives each
+output the slice matching its configured position. It honors negative and
+staggered coordinates as well as the default side-by-side layout. On a pinned
+or single-output greeter, or when complete span geometry is unavailable, it
+behaves like `crop`. Keep the layout and per-output scales synchronized so the
+slices line up with the physical monitor arrangement. This affects only the
+wallpaper; every output keeps its own normally scaled greeter UI.
 
 The greeter exposes the **Synced** scheme when either config file contains a complete palette. Session and scheme choices made on the login screen are also remembered in `sync.toml`; see [Configuration](configuration.md#keys-the-greeter-remembers).
 
@@ -172,7 +189,7 @@ NixOS users configure the same authorization declaratively. With the project
 module, list trusted login users directly:
 
 ```nix
-programs.noctalia-greeter.passwordless-sync-users = [ "alice" ];
+services.displayManager.noctalia-greeter.passwordless-sync-users = [ "alice" ];
 ```
 
 The option defaults to an empty list, which keeps every sync authenticated. The
@@ -181,32 +198,11 @@ so this prompted flow is usable regardless of the list. When users are listed,
 it additionally generates a rule limited to the exact packaged helper, the root
 target account, and those users in active local sessions.
 
-The nixpkgs module does not currently have that convenience option. Once its
-selected greeter package meets the compatibility requirements above, add the
-equivalent rule in your NixOS configuration:
+The nixpkgs module works the same, only with a slightly different notation:
 
 ```nix
-security.polkit = {
-  enable = true;
-  extraConfig = ''
-    polkit.addRule(function(action, subject) {
-      var allowedUsers = ["alice"];
-
-      if (action.id == "org.noctalia.greeter.sync-appearance" &&
-          action.lookup("program") == "${pkgs.noctalia-greeter}/bin/noctalia-greeter-apply-appearance" &&
-          action.lookup("user") == "root" &&
-          subject.local && subject.active &&
-          allowedUsers.indexOf(subject.user) >= 0) {
-        return polkit.Result.YES;
-      }
-    });
-  '';
-};
+services.displayManager.noctalia-greeter.passwordlessSyncUsers = [ "alice" ];
 ```
-
-Ensure `pkexec` is available on the selected NixOS release. On releases that
-expose `security.polkit.enablePkexecWrapper`, set that option to `true`; releases
-without it provide the wrapper when Polkit is enabled.
 
 If you override `services.displayManager.noctalia-greeter.package`, use that
 same package in the helper path. Greeter 1.3.1 and older do not provide this

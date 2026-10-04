@@ -40,8 +40,8 @@ namespace greeter::secure_sync {
     constexpr std::uint64_t kConfigSizeLimit = 256U * 1024U;
     // greeter_compositor_config stores each serialized output value in a 2048-byte buffer.
     constexpr std::uint64_t kOutputMetadataSizeLimit = 2047U;
-    constexpr std::uint64_t kWallpaperSizeLimit = 64U * 1024U * 1024U;
-    constexpr std::uint64_t kTotalSizeLimit = 128U * 1024U * 1024U;
+    constexpr std::uint64_t kWallpaperSizeLimit = 256U * 1024U * 1024U;
+    constexpr std::uint64_t kTotalSizeLimit = 512U * 1024U * 1024U;
     // Config + three output files + a fallback and up to sixteen per-output wallpapers.
     constexpr std::size_t kFileCountLimit = 22;
     constexpr std::size_t kOutputEntryLimit = 16;
@@ -571,7 +571,7 @@ namespace greeter::secure_sync {
       bool foundLegacyManifest = false;
       errno = 0;
       while (const dirent* entry = ::readdir(rawDirectory)) {
-        const std::string_view name(entry->d_name);
+        const std::string name(entry->d_name);
         if (name == "." || name == "..") {
           continue;
         }
@@ -1121,6 +1121,28 @@ namespace greeter::secure_sync {
           staging.get(), callerUid, snapshots, wallpaperFiles, /*allowLegacyManifest=*/false,
           WritableEntryPolicy::Reject, errorOut
       );
+    }
+
+    bool validateConstrainedPayloadForTesting(const std::filesystem::path& stagingDirectory, std::string& errorOut) {
+      UniqueFd staging(::open(stagingDirectory.c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC | O_NOFOLLOW));
+      if (!staging.valid()) {
+        return setErrnoError("failed to open the sync staging directory", errorOut);
+      }
+
+      std::vector<StagedFileSnapshot> snapshots;
+      std::unordered_set<std::string> wallpaperFiles;
+      if (!snapshotStagingFiles(
+              staging.get(), ::getuid(), snapshots, wallpaperFiles, /*allowLegacyManifest=*/false,
+              WritableEntryPolicy::Reject, errorOut
+          )) {
+        return false;
+      }
+
+      TemporaryDirectory privateStaging;
+      if (!privateStaging.create(errorOut) || !materializeSnapshots(privateStaging, snapshots, errorOut)) {
+        return false;
+      }
+      return validatePayload(privateStaging, wallpaperFiles, errorOut);
     }
 
   } // namespace detail

@@ -40,6 +40,10 @@ namespace greeter {
     // Unset → 0, i.e. an unblurred, untinted wallpaper.
     std::optional<float> blurIntensity;
     std::optional<float> tintIntensity;
+    bool clockEnabled = true;
+    std::string clockPosition = "above-panel";
+    std::string clockTimeFormat = "{:%H:%M}";
+    std::string clockDateFormat = "%A, %x";
   };
 
   [[nodiscard]] std::filesystem::path greeterConfPath();

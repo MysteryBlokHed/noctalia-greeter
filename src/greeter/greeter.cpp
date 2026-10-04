@@ -10,6 +10,7 @@
 #include "render/render_context.h"
 #include "render/text/glyph_registry.h"
 #include "ui/controls/input.h"
+#include "wayland/output_span_layout.h"
 #include "wayland/wayland_client.h"
 #include "wayland/wayland_seat.h"
 
@@ -56,7 +57,7 @@ namespace {
       return;
     }
 
-    kLog.info("preferred output connector: {}", *configured);
+    kLog.info("preferred output: {}", *configured);
   }
 } // namespace
 
@@ -154,6 +155,12 @@ int Greeter::run(WaylandClient& client, const std::atomic<bool>& shutdownRequest
   while (!m_exitRequested && !shutdownRequested.load(std::memory_order_relaxed)) {
     client.repeatTick();
 
+    for (auto& view : m_views) {
+      if (view.surface->updateClock()) {
+        view.surface->requestLayout();
+      }
+    }
+
     if (client.flush() < 0) {
       kLog.error("Wayland flush failed");
       return 1;
@@ -161,7 +168,12 @@ int Greeter::run(WaylandClient& client, const std::atomic<bool>& shutdownRequest
 
     const int repeatMs = client.repeatPollTimeoutMs();
     const int requestMs = m_greetdClient.requestPollTimeoutMs();
-    const int timeoutMs = repeatMs < 0 ? requestMs : requestMs < 0 ? repeatMs : std::min(repeatMs, requestMs);
+    const int eventTimeoutMs = repeatMs < 0 ? requestMs : requestMs < 0 ? repeatMs : std::min(repeatMs, requestMs);
+    const auto wallNow = std::chrono::system_clock::now().time_since_epoch();
+    const auto wallMilliseconds = std::chrono::duration_cast<std::chrono::milliseconds>(wallNow).count();
+    const auto currentSecondRemainder = (wallMilliseconds % 1000 + 1000) % 1000;
+    const int clockTimeoutMs = 1000 - static_cast<int>(currentSecondRemainder);
+    const int timeoutMs = eventTimeoutMs < 0 ? clockTimeoutMs : std::min(eventTimeoutMs, clockTimeoutMs);
 
     while (wl_display_prepare_read(display) != 0) {
       if (wl_display_dispatch_pending(display) < 0) {
@@ -247,11 +259,18 @@ void Greeter::syncOutputWindows() {
   struct TargetOutput {
     wl_output* output = nullptr;
     std::string name;
+    std::optional<WaylandOutputLayout> layout;
   };
   std::vector<TargetOutput> targets;
   for (const WaylandOutputInfo* output : m_client->greeterTargetOutputs()) {
     if (output != nullptr) {
-      targets.push_back(TargetOutput{.output = output->output, .name = output->name});
+      targets.push_back(
+          TargetOutput{
+              .output = output->output,
+              .name = output->name,
+              .layout = m_client->logicalLayoutForOutput(output->output),
+          }
+      );
     }
   }
   kLog.info("syncOutputWindows: {} target output(s), {} view(s)", targets.size(), m_views.size());
@@ -342,9 +361,29 @@ void Greeter::syncOutputWindows() {
     }
   }
 
+  std::vector<greeter::OutputSpanGeometry> spanOutputs;
+  if (targets.size() > 1) {
+    spanOutputs.reserve(targets.size());
+    for (const TargetOutput& target : targets) {
+      if (!target.layout.has_value()) {
+        spanOutputs.clear();
+        break;
+      }
+      spanOutputs.push_back(
+          greeter::OutputSpanGeometry{
+              .x = target.layout->x,
+              .y = target.layout->y,
+              .width = target.layout->width,
+              .height = target.layout->height,
+          }
+      );
+    }
+  }
+
   for (std::size_t i = 0; i < targets.size(); ++i) {
     m_views[i].window->bindOutput(targets[i].output);
     m_views[i].surface->setBoundOutputName(targets[i].name);
+    m_views[i].surface->setWallpaperSpanParams(greeter::computeWallpaperSpanParams(spanOutputs, i));
     m_views[i].window->matchOutputLogicalSize();
     if (m_sceneReady) {
       m_views[i].window->setSceneReady(true);

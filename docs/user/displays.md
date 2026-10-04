@@ -9,7 +9,7 @@ Noctalia Greeter uses its bundled wlroots compositor to configure displays. Put
 the settings on this page under `[output]` in
 `/var/lib/noctalia-greeter/greeter.toml`. On NixOS, use
 `services.displayManager.noctalia-greeter.settings.output` with the nixpkgs
-module or `programs.noctalia-greeter.settings.output` with the project flake.
+and project flake modules.
 
 - [Find connector names](#find-connector-names)
 - [Choose which monitors show the greeter](#choose-which-monitors-show-the-greeter)
@@ -25,16 +25,25 @@ module or `programs.noctalia-greeter.settings.output` with the project flake.
 Run this from a graphical Wayland session:
 
 ```sh
-noctalia-greeter outputs
+noctalia-greeter outputs --details
 ```
 
-Use the connector names it prints, such as `DP-1` or `HDMI-A-1`, in the
-settings below.
+The first column is the connector name, such as `DP-1` or `HDMI-A-1`. When the
+display exposes EDID identity data, the second column is a stable identifier
+made from its manufacturer, model, and serial number. Either value can be used
+for `[output].name` and for entries in `layout`, `transforms`, and `scales`.
+Per-output wallpaper entries continue to use connector names.
 
 ## Choose which monitors show the greeter
 
 By default, the greeter shows the same login interface on every connected
 monitor. Each display uses its own resolution and scale.
+
+On laptops, the compositor follows the libinput lid switch. While the lid is
+closed and an external display can be enabled, internal `eDP-*` and `LVDS-*`
+outputs are disabled and removed from the greeter layout. They return when the
+lid opens or the last usable external display disappears. An explicit
+`[output].name` pin takes precedence over automatic lid handling.
 
 To show it on only one monitor, pin that connector:
 
@@ -43,9 +52,19 @@ To show it on only one monitor, pin that connector:
 name = "DP-2"
 ```
 
+If connector numbers change across boots, use the stable identifier shown by
+`noctalia-greeter outputs --details` instead:
+
+```toml
+[output]
+name = "Acer Technologies XV242Y TL1EE0018521"
+```
+
 The compositor disables all other connectors at the KMS level while the
-greeter is running. If `name` is empty, missing, invalid, or refers to a
-disconnected monitor, the greeter falls back to all connected outputs.
+greeter is running. A non-selected connector that is already disabled remains
+off without a temporary modeset. If `name` is empty, missing, invalid, or
+refers to a disconnected monitor, the greeter falls back to all connected
+outputs.
 
 ## Arrange multiple monitors
 
@@ -61,9 +80,20 @@ scales = "DP-1:1; DP-2:1"
 
 `layout` coordinates are logical pixels. Use matching per-output `scales` so
 the configured edges remain adjacent and the pointer can move naturally
-between monitors. When `layout` is set but a connector has no matching scale,
-that connector uses scale `1.0` instead of automatic DPI scaling. A global
-`scale` setting overrides all per-output scales.
+between monitors. Entries may use connector names or stable identifiers. Use
+semicolons between entries when identifiers contain spaces:
+
+```toml
+[output]
+layout = "Dell Inc. DELL U2723QE ABC123:0,0; LG Electronics LG HDR 4K XYZ789:2560,0"
+scales = "Dell Inc. DELL U2723QE ABC123:1.25; LG Electronics LG HDR 4K XYZ789:1.5"
+```
+
+When a configured layout entry has no matching scale, that output uses scale
+`1.0` to preserve its recorded logical coordinates. Connected outputs omitted
+from the layout are placed after the rightmost configured output and retain
+automatic DPI scaling. A global `scale` setting overrides all per-output
+scales.
 
 Noctalia can copy layout, transform, and effective scale values from the
 desktop session through xdg-output. It records a layout only when multiple
@@ -73,9 +103,9 @@ one ready output. See [Sync with Noctalia](sync.md). Values declared in
 
 ## Match the desktop output mode
 
-By default, the compositor uses each display's EDID-preferred resolution and
-then selects the highest advertised refresh rate at that size. If this differs
-from the desktop session, the display may flash or modeset during login.
+By default, the compositor uses each display's complete EDID-preferred mode,
+including its refresh rate. This avoids selecting a higher advertised rate that
+a bandwidth-limited dock or MST link cannot drive.
 
 Set both `width` and `height` to request a particular resolution:
 
@@ -84,21 +114,38 @@ Set both `width` and `height` to request a particular resolution:
 name = "DP-2"
 width = 5120
 height = 2160
+refresh_rate = 120
 ```
 
 Both values are required and must be positive. A partial or invalid override
-is ignored. If the display does not advertise the requested size, the
-compositor logs a warning and falls back to the preferred-resolution behavior.
-At the requested size, it still chooses the highest advertised refresh rate.
+is ignored. `refresh_rate` is in hertz and can be set with or without an
+explicit size. Without `width` and `height`, it applies to the EDID-preferred
+resolution. Nominal rates match fractional DRM modes within 1 Hz, so `120`
+matches modes such as `119.998`. If the display does not advertise the requested
+size or a close refresh rate, the compositor logs a warning and falls back to
+the highest advertised refresh rate at the selected resolution.
+
+For multiple displays with different refresh rates, use the mapping form of the
+same key:
+
+```toml
+[output]
+refresh_rate = "DP-1:120; HDMI-A-1:60"
+```
+
+Entries are separated by semicolons and may use either connector names or the
+stable identifiers reported by `noctalia-greeter outputs --details`. Use either
+the numeric global form or the per-output mapping form, not both.
 
 :::note
-`width` and `height` select the physical DRM mode in pixels. They are separate
-from `scale`, which changes the size of the greeter interface. Mode dimensions
-are selected before any output rotation is applied.
+`width` and `height` select the physical DRM mode in pixels, while
+`refresh_rate` selects refresh rates in hertz. It is separate from `scale`,
+which changes the size of the greeter interface. Mode dimensions are selected
+before any output rotation is applied.
 :::
 
-Match the resolution to the desktop session to avoid an unnecessary resolution
-change when logging in.
+Match the resolution and refresh rate to the desktop session to avoid an
+unnecessary mode change when logging in.
 
 ## Rotate an output
 
@@ -131,8 +178,8 @@ results match. Automatic scale is capped at `2`.
 Scale is resolved independently for each output in this order:
 
 1. Global `[output].scale` in `greeter.toml`
-2. A connector entry in `[output].scales` from `greeter.toml`, then `sync.toml`
-3. Scale `1.0` when `[output].layout` applies but the connector has no scale
+2. A connector or stable-identifier entry in `[output].scales` from `greeter.toml`, then `sync.toml`
+3. Scale `1.0` when the output has a matching `[output].layout` entry but no scale
 4. Automatic scale from display geometry
 
 Set different scales per connector:
@@ -186,18 +233,10 @@ session command with `env`:
 command = "env NOCTALIA_GREETER_IDLE_TIMEOUT=300 /usr/bin/noctalia-greeter-session"
 ```
 
-On NixOS with the nixpkgs module:
+On NixOS with the nixpkgs and project flake modules:
 
 ```nix
 services.displayManager.noctalia-greeter.settings = {
-  idle.timeout = 300;
-};
-```
-
-With the project flake module instead:
-
-```nix
-programs.noctalia-greeter.settings = {
   idle.timeout = 300;
 };
 ```

@@ -7,6 +7,7 @@
 #include "render/animation/animation_manager.h"
 #include "render/core/color.h"
 #include "render/core/texture_handle.h"
+#include "render/core/wallpaper_types.h"
 #include "render/scene/input_dispatcher.h"
 #include "render/scene/node.h"
 
@@ -44,6 +45,7 @@ public:
 
   void setWindow(GreeterWindow* window);
   void setBoundOutputName(std::string outputName);
+  void setWallpaperSpanParams(const WallpaperSpanParams& params);
   void setGreetdClient(GreetdClient* client);
   void setUsername(const std::string& username);
   void setOnExitRequested(std::function<void()> callback);
@@ -79,6 +81,9 @@ public:
   void flushDeferredFrameRequests();
 
   void prepareFrame(std::uint32_t width, std::uint32_t height, bool needsLayout);
+  // Refreshes the wall-clock labels once per second. Returns true when their
+  // contents changed and a new layout is needed.
+  [[nodiscard]] bool updateClock();
 
   void setOutputViewport(float x, float y, float width, float height);
   void clearOutputViewport();
@@ -108,6 +113,9 @@ private:
   void toggleSchemeMenu();
   void closeMenus();
   void closeMenusAndRestoreFocus();
+  // Password field while the password step is up, else null. Selector menus hand
+  // focus back here so typing can resume without a manual Shift+Tab.
+  [[nodiscard]] InputArea* menuReturnFocusTarget() const;
   void selectSession(std::size_t index);
   void selectScheme(std::size_t index);
   void runBackAction();
@@ -120,6 +128,8 @@ private:
   void layoutPanelUserSelector(float x, float y, float w, float h);
   void layoutPanelSessionSelector(float x, float y, float w, float h);
   void layoutPowerButtons(float ox, float oy, float sw, float sh);
+  void
+  layoutClock(float ox, float oy, float sw, float sh, float panelX, float panelY, float panelWidth, float panelHeight);
   void commitImmediateFrame(bool layout);
   void setFocusIndex(std::ptrdiff_t index);
   void syncFocusIndexFromFocused();
@@ -157,6 +167,7 @@ private:
   void savePreferences() const;
   void buildSchemeNames();
   void applyScheme(std::size_t schemeIndex);
+  void applyConfiguredWallpaper();
   void clearWallpaperDisplay();
   void applyWallpaperBackdrop(const Palette& sourcePalette);
   [[nodiscard]] bool isSyncedScheme(std::size_t schemeIndex) const;
@@ -213,6 +224,8 @@ private:
   RectNode* m_configErrorBanner = nullptr;
   Label* m_configErrorHeading = nullptr;
   Label* m_configErrorLabel = nullptr;
+  Label* m_clockTimeLabel = nullptr;
+  Label* m_clockDateLabel = nullptr;
   Button* m_shutdownButton = nullptr;
   Button* m_rebootButton = nullptr;
   Button* m_firmwareButton = nullptr;
@@ -251,18 +264,25 @@ private:
   TextureHandle m_headerAvatarTexture{};
   TextureHandle m_wallpaperTexture{};
   std::string m_loadedHeaderAvatarPath;
+  int m_loadedHeaderAvatarPixelSize = 0;
   std::string m_boundOutputName;
   std::string m_wallpaperPath;
   WallpaperFillMode m_wallpaperFillMode = WallpaperFillMode::Crop;
   Color m_wallpaperFillColor = rgba(0.0f, 0.0f, 0.0f, 0.0f);
+  WallpaperSpanParams m_wallpaperSpanParams;
   bool m_wallpaperDirty = false;
-  bool m_hasSyncedWallpaper = false;
+  bool m_hasWallpaper = false;
   float m_blurIntensity = 0.0f;
   float m_tintIntensity = 0.0f;
   bool m_hideLogo = false;
   // UI element positioning: "hidden", "bottom-left", "bottom-right", "top-left", "top-right"
   std::string m_powerButtonsPosition;
   std::string m_schemeSelectorPosition;
+  bool m_clockEnabled = true;
+  std::string m_clockPosition = "above-panel";
+  std::string m_clockTimeFormat = "{:%H:%M}";
+  std::string m_clockDateFormat = "%A, %x";
+  std::optional<std::int64_t> m_lastClockSecond;
   std::chrono::steady_clock::time_point m_lastAnimTick{};
   bool m_animTickInitialized = false;
   bool m_inInputDispatch = false;
@@ -312,6 +332,7 @@ private:
   std::vector<std::string> m_schemeNames;
   std::size_t m_selectedScheme = 0;
   std::optional<GreeterSyncedAppearance> m_syncedAppearance;
+  std::optional<GreeterWallpaperAppearance> m_wallpaperAppearance;
 
   void loadUsers();
   void loadSessions();
